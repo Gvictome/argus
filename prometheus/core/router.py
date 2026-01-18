@@ -31,6 +31,8 @@ class AgentInfo:
     pid: Optional[int] = None
     started_at: Optional[datetime] = None
     capabilities: List[str] = field(default_factory=list)
+    buffs: List[str] = field(default_factory=list)  # Active buff names
+    config: Dict[str, Any] = field(default_factory=dict)  # Enhanced config
     error: Optional[str] = None
 
 
@@ -39,6 +41,7 @@ class ProjectInfo:
     """Information about a registered project"""
     name: str
     path: Path
+    industry: str = "general"  # Industry concentration
     agents: Dict[str, AgentInfo] = field(default_factory=dict)
     plugins: List[str] = field(default_factory=list)
     active: bool = False
@@ -153,6 +156,9 @@ class AgentRouter:
             CommandType.KILL_AGENT: self._kill_agent,
             CommandType.LIST_AGENTS: self._list_agents,
             CommandType.AGENT_STATUS: self._agent_status,
+            CommandType.BUFF_AGENT: self._buff_agent,
+            CommandType.SET_INDUSTRY: self._set_industry,
+            CommandType.LIST_INDUSTRIES: self._list_industries,
             CommandType.INSTALL_PLUGIN: self._install_plugin,
             CommandType.REMOVE_PLUGIN: self._remove_plugin,
             CommandType.LIST_PLUGINS: self._list_plugins,
@@ -294,7 +300,7 @@ class AgentRouter:
     # =========================================================================
 
     async def _spawn_agent(self, cmd: ParsedCommand) -> Dict:
-        """Spawn a new agent"""
+        """Spawn a new agent with industry-specific buffs"""
         agent_type = cmd.agent
         if not agent_type:
             return {"error": "Agent type required"}
@@ -310,22 +316,155 @@ class AgentRouter:
 
         project = self.projects[self.active_project]
 
-        # Create agent
+        # Get industry and apply buffs
+        from prometheus.core.industries import Industry, agent_enhancer
+
+        try:
+            industry = Industry(project.industry)
+        except ValueError:
+            industry = Industry.GENERAL
+
+        # Get enhanced spawn config with buffs applied
+        enhanced_config = agent_enhancer.get_enhanced_spawn_config(
+            agent_type=agent_type,
+            industry=industry,
+            task=None  # Could be passed from command
+        )
+
+        # Get active buff names
+        buffs = agent_enhancer.get_buffs_for_agent(agent_type, industry)
+        buff_names = [b.name for b in buffs]
+
+        # Create agent with buffs
         agent = AgentInfo(
             name=f"{agent_type}_{self.active_project}",
             type=agent_type,
             project=self.active_project,
             status=AgentStatus.RUNNING,
-            started_at=datetime.now()
+            started_at=datetime.now(),
+            capabilities=enhanced_config.get("capabilities", []),
+            buffs=buff_names,
+            config=enhanced_config
         )
 
         project.agents[agent_type] = agent
 
-        return {
+        # Build response
+        response = {
             "success": True,
             "message": f"Spawned {agent_type} agent",
             "agent": agent.name,
-            "project": self.active_project
+            "project": self.active_project,
+            "industry": project.industry,
+        }
+
+        if buff_names:
+            response["buffs_applied"] = buff_names
+            response["message"] = f"Spawned {agent_type} agent with {len(buff_names)} buff(s)"
+
+        if agent.capabilities:
+            response["capabilities"] = agent.capabilities
+
+        return response
+
+    async def _buff_agent(self, cmd: ParsedCommand) -> Dict:
+        """Apply additional buffs to an existing agent"""
+        agent_type = cmd.agent
+        if not self.active_project:
+            return {"error": "No active project"}
+
+        project = self.projects[self.active_project]
+
+        if agent_type not in project.agents:
+            return {"error": f"Agent '{agent_type}' not running. Spawn it first."}
+
+        from prometheus.core.industries import Industry, agent_enhancer
+
+        try:
+            industry = Industry(project.industry)
+        except ValueError:
+            industry = Industry.GENERAL
+
+        # Re-apply buffs with current industry
+        agent = project.agents[agent_type]
+        enhanced_config = agent_enhancer.apply_buffs(
+            agent_type=agent_type,
+            agent_config=agent.config,
+            industry=industry
+        )
+
+        # Update agent
+        buffs = agent_enhancer.get_buffs_for_agent(agent_type, industry)
+        agent.buffs = [b.name for b in buffs]
+        agent.capabilities = enhanced_config.get("capabilities", [])
+        agent.config = enhanced_config
+
+        return {
+            "success": True,
+            "message": f"Buffed {agent_type} agent for {industry.value}",
+            "buffs": agent.buffs,
+            "capabilities": agent.capabilities
+        }
+
+    async def _set_industry(self, cmd: ParsedCommand) -> Dict:
+        """Set the industry concentration for active project"""
+        if not self.active_project:
+            return {"error": "No active project"}
+
+        from prometheus.core.industries import Industry, INDUSTRY_CONFIGS
+
+        industry_name = cmd.args.get("industry", "").lower()
+
+        # Try to match industry
+        matched = None
+        for ind in Industry:
+            if ind.value == industry_name or industry_name in ind.value:
+                matched = ind
+                break
+
+        if not matched:
+            return {
+                "error": f"Unknown industry: {industry_name}",
+                "available": [i.value for i in Industry]
+            }
+
+        project = self.projects[self.active_project]
+        project.industry = matched.value
+
+        config = INDUSTRY_CONFIGS[matched]
+
+        return {
+            "success": True,
+            "message": f"Set industry to {matched.value}",
+            "industry": matched.value,
+            "recommended_agents": config.recommended_agents,
+            "recommended_plugins": config.recommended_plugins
+        }
+
+    async def _list_industries(self, cmd: ParsedCommand) -> Dict:
+        """List all available industry concentrations"""
+        from prometheus.core.industries import Industry, INDUSTRY_CONFIGS
+
+        industries = []
+        for ind in Industry:
+            config = INDUSTRY_CONFIGS.get(ind)
+            if config:
+                industries.append({
+                    "id": ind.value,
+                    "name": config.name,
+                    "description": config.description,
+                    "recommended_agents": config.recommended_agents,
+                    "recommended_plugins": config.recommended_plugins
+                })
+
+        current = None
+        if self.active_project:
+            current = self.projects[self.active_project].industry
+
+        return {
+            "industries": industries,
+            "count": len(industries),
+            "current": current
         }
 
     async def _kill_agent(self, cmd: ParsedCommand) -> Dict:
@@ -532,6 +671,11 @@ class AgentRouter:
                     "spawn <type> agent",
                     "kill <type> agent",
                     "list agents",
+                    "buff <type> agent",
+                ],
+                "industry": [
+                    "set industry <type>",
+                    "list industries",
                 ],
                 "plugins": [
                     "install <name> plugin",

@@ -22,6 +22,11 @@ class CommandType(Enum):
     KILL_AGENT = "kill_agent"
     LIST_AGENTS = "list_agents"
     AGENT_STATUS = "agent_status"
+    BUFF_AGENT = "buff_agent"
+
+    # Industry / Concentration
+    SET_INDUSTRY = "set_industry"
+    LIST_INDUSTRIES = "list_industries"
 
     # Plugin Management
     INSTALL_PLUGIN = "install_plugin"
@@ -125,6 +130,27 @@ class CommandParser:
             r"(\w+) agent status",
             r"status of (?:the )?(\w+)(?: agent)?",
             r"how is (?:the )?(\w+)",
+        ],
+        CommandType.BUFF_AGENT: [
+            r"buff (?:the )?(\w+)(?: agent)?",
+            r"enhance (?:the )?(\w+)(?: agent)?",
+            r"improve (?:the )?(\w+)(?: agent)?",
+            r"upgrade (?:the )?(\w+)(?: agent)?",
+            r"boost (?:the )?(\w+)(?: agent)?",
+        ],
+        CommandType.SET_INDUSTRY: [
+            r"set industry (?:to )?(\w+)",
+            r"focus on (\w+) industry",
+            r"this is (?:a |an )?(\w+) project",
+            r"concentration (?:is )?(\w+)",
+            r"industry (\w+)",
+        ],
+        CommandType.LIST_INDUSTRIES: [
+            r"list industr(?:ies|y)",
+            r"show industr(?:ies|y)",
+            r"what industr(?:ies|y)",
+            r"available industr(?:ies|y)",
+            r"concentrations",
         ],
         CommandType.INSTALL_PLUGIN: [
             r"install (?:the )?(\w+)(?: plugin)?",
@@ -259,12 +285,16 @@ class CommandParser:
             cmd.project = groups[0] if groups else None
 
         elif cmd_type in [CommandType.SPAWN_AGENT, CommandType.KILL_AGENT,
-                          CommandType.AGENT_STATUS]:
+                          CommandType.AGENT_STATUS, CommandType.BUFF_AGENT]:
             agent = groups[0] if groups else None
             # Normalize agent name
             if agent:
                 agent = self._normalize_agent(agent)
             cmd.agent = agent
+
+        elif cmd_type == CommandType.SET_INDUSTRY:
+            industry = groups[0] if groups else None
+            cmd.args["industry"] = industry
 
         elif cmd_type in [CommandType.INSTALL_PLUGIN, CommandType.REMOVE_PLUGIN]:
             plugin = groups[0] if groups else None
