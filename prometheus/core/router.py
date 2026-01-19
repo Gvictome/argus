@@ -3,6 +3,9 @@ Agent Router - Routes commands to agents across projects
 """
 
 import asyncio
+import subprocess
+import sys
+import os
 from pathlib import Path
 from dataclasses import dataclass, field
 from enum import Enum
@@ -347,6 +350,10 @@ class AgentRouter:
             config=enhanced_config
         )
 
+        # Spawn agent in new Windows Terminal tab
+        pid = self._spawn_in_terminal(agent_type, project.path, enhanced_config)
+        agent.pid = pid
+
         project.agents[agent_type] = agent
 
         # Build response
@@ -356,6 +363,7 @@ class AgentRouter:
             "agent": agent.name,
             "project": self.active_project,
             "industry": project.industry,
+            "pid": pid,
         }
 
         if buff_names:
@@ -366,6 +374,113 @@ class AgentRouter:
             response["capabilities"] = agent.capabilities
 
         return response
+
+    def _spawn_in_terminal(
+        self,
+        agent_type: str,
+        project_path: Path,
+        config: Dict[str, Any]
+    ) -> Optional[int]:
+        """
+        Spawn an agent in a new Windows Terminal tab
+
+        Args:
+            agent_type: Type of agent to spawn
+            project_path: Path to the project
+            config: Agent configuration with buffs applied
+
+        Returns:
+            Process ID if spawned, None otherwise
+        """
+        agent_info = self.AGENT_REGISTRY.get(agent_type)
+        if not agent_info:
+            return None
+
+        module = agent_info["module"]
+        class_name = agent_info["class"]
+
+        # Build the Python command to run the agent
+        agent_script = f'''
+import sys
+sys.path.insert(0, r"{project_path}")
+print("=" * 60)
+print(f"  PROMETHEUS AGENT: {agent_type.upper()}")
+print(f"  Project: {project_path.name}")
+print(f"  Config: {config}")
+print("=" * 60)
+print()
+try:
+    from {module} import {class_name}
+    agent = {class_name}()
+    print(f"[{agent_type}] Agent initialized successfully")
+    print(f"[{agent_type}] Capabilities: {config.get('capabilities', [])}")
+    print(f"[{agent_type}] Running... Press Ctrl+C to stop")
+    print()
+    # Keep agent running
+    if hasattr(agent, 'run'):
+        agent.run()
+    elif hasattr(agent, 'start'):
+        agent.start()
+    else:
+        import time
+        while True:
+            time.sleep(1)
+except ImportError as e:
+    print(f"[{agent_type}] Module not found: {{e}}")
+    print(f"[{agent_type}] Agent stub running in monitor mode...")
+    import time
+    while True:
+        time.sleep(5)
+        print(f"[{agent_type}] Heartbeat...")
+except KeyboardInterrupt:
+    print(f"\\n[{agent_type}] Agent stopped by user")
+except Exception as e:
+    print(f"[{agent_type}] Error: {{e}}")
+    import traceback
+    traceback.print_exc()
+    input("Press Enter to close...")
+'''
+
+        try:
+            # Check if Windows Terminal is available
+            if sys.platform == "win32":
+                # Try Windows Terminal first
+                try:
+                    process = subprocess.Popen(
+                        [
+                            'wt', '-w', '0', 'new-tab',
+                            '--title', f'{agent_type} agent',
+                            'python', '-c', agent_script
+                        ],
+                        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
+                    )
+                    return process.pid
+                except FileNotFoundError:
+                    # Fall back to regular cmd window
+                    process = subprocess.Popen(
+                        ['cmd', '/c', 'start', f'{agent_type} agent',
+                         'python', '-c', agent_script],
+                        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
+                    )
+                    return process.pid
+            else:
+                # Linux/Mac - try common terminal emulators
+                terminals = [
+                    ['gnome-terminal', '--', 'python', '-c', agent_script],
+                    ['xterm', '-e', 'python', '-c', agent_script],
+                    ['konsole', '-e', 'python', '-c', agent_script],
+                ]
+                for term_cmd in terminals:
+                    try:
+                        process = subprocess.Popen(term_cmd)
+                        return process.pid
+                    except FileNotFoundError:
+                        continue
+
+        except Exception as e:
+            print(f"Warning: Could not spawn terminal for {agent_type}: {e}")
+
+        return None
 
     async def _buff_agent(self, cmd: ParsedCommand) -> Dict:
         """Apply additional buffs to an existing agent"""
@@ -468,7 +583,7 @@ class AgentRouter:
         }
 
     async def _kill_agent(self, cmd: ParsedCommand) -> Dict:
-        """Kill an agent"""
+        """Kill an agent and its terminal process"""
         agent_type = cmd.agent
         if not self.active_project:
             return {"error": "No active project"}
@@ -478,15 +593,34 @@ class AgentRouter:
         if agent_type not in project.agents:
             return {"error": f"Agent '{agent_type}' not running"}
 
+        agent = project.agents[agent_type]
+        pid = agent.pid
+
+        # Kill the process if we have a PID
+        if pid:
+            try:
+                if sys.platform == "win32":
+                    # Windows: use taskkill to kill process tree
+                    subprocess.run(
+                        ['taskkill', '/PID', str(pid), '/T', '/F'],
+                        capture_output=True
+                    )
+                else:
+                    # Linux/Mac: use kill
+                    os.kill(pid, 9)
+            except Exception as e:
+                print(f"Warning: Could not kill process {pid}: {e}")
+
         del project.agents[agent_type]
 
         return {
             "success": True,
-            "message": f"Killed {agent_type} agent"
+            "message": f"Killed {agent_type} agent",
+            "pid": pid
         }
 
     async def _list_agents(self, cmd: ParsedCommand) -> Dict:
-        """List all running agents"""
+        """List all running agents with PIDs and buffs"""
         all_agents = []
 
         for project in self.projects.values():
@@ -496,6 +630,9 @@ class AgentRouter:
                     "type": agent.type,
                     "project": agent.project,
                     "status": agent.status.value,
+                    "pid": agent.pid,
+                    "buffs": agent.buffs,
+                    "capabilities": agent.capabilities,
                     "started": agent.started_at.isoformat() if agent.started_at else None
                 })
 
