@@ -1,33 +1,58 @@
 """
 Voice Listener - Microphone input with wake word detection
+
+Uses sounddevice + whisper (no PyAudio required)
 """
 
 import threading
+import numpy as np
 from queue import Queue
 from typing import Callable, Optional, List
+import tempfile
+import wave
+import os
 
-# Lazy imports for optional dependencies
-speech_recognition = None
-whisper = None
+# Lazy imports
+sounddevice = None
+whisper_model = None
 
 
-def _ensure_speech_recognition():
-    global speech_recognition
-    if speech_recognition is None:
+def _ensure_sounddevice():
+    global sounddevice
+    if sounddevice is None:
         try:
-            import speech_recognition as sr
-            speech_recognition = sr
+            import sounddevice as sd
+            sounddevice = sd
         except ImportError:
             raise ImportError(
-                "speech_recognition not installed. "
-                "Install with: pip install SpeechRecognition pyaudio"
+                "sounddevice not installed. "
+                "Install with: pip install sounddevice"
             )
-    return speech_recognition
+    return sounddevice
+
+
+def _ensure_whisper():
+    global whisper_model
+    if whisper_model is None:
+        try:
+            import whisper
+            print("[voice] Loading Whisper model (first time may take a moment)...")
+            whisper_model = whisper.load_model("base")
+            print("[voice] Whisper model loaded")
+        except ImportError:
+            raise ImportError(
+                "whisper not installed. "
+                "Install with: pip install openai-whisper"
+            )
+    return whisper_model
 
 
 class VoiceListener:
     """
     Continuous microphone listener for voice commands
+
+    Uses sounddevice for recording and Whisper for transcription.
+    No PyAudio required!
 
     Wake words: "Hey Prometheus", "Prometheus", "Senior Dev"
 
@@ -39,39 +64,49 @@ class VoiceListener:
 
     WAKE_WORDS = ["prometheus", "senior dev", "hey prometheus"]
 
-    def __init__(self, use_whisper: bool = False):
+    # Audio settings
+    SAMPLE_RATE = 16000  # Whisper expects 16kHz
+    CHANNELS = 1
+    DTYPE = np.float32
+
+    def __init__(self, model_size: str = "base"):
         """
         Initialize voice listener
 
         Args:
-            use_whisper: Use local Whisper model instead of Google API
+            model_size: Whisper model size (tiny, base, small, medium, large)
         """
-        sr = _ensure_speech_recognition()
+        self.sd = _ensure_sounddevice()
+        self.model_size = model_size
+        self.model = None  # Lazy load
 
-        self.recognizer = sr.Recognizer()
-        self.microphone = sr.Microphone()
         self.command_queue: Queue = Queue()
         self.is_listening = False
         self.is_awake = False
-        self.use_whisper = use_whisper
         self._callbacks: List[Callable] = []
         self._listen_thread: Optional[threading.Thread] = None
 
-        # Calibrate for ambient noise
-        print("🎤 Calibrating microphone...")
-        with self.microphone as source:
-            self.recognizer.adjust_for_ambient_noise(source, duration=1)
-        print("🎤 Microphone ready")
+        # Check microphone
+        print("[voice] Checking microphone...")
+        try:
+            devices = self.sd.query_devices()
+            default_input = self.sd.query_devices(kind='input')
+            print(f"[voice] Using: {default_input['name']}")
+        except Exception as e:
+            print(f"[voice] Warning: {e}")
 
     def start(self):
         """Start listening in background thread"""
         if self.is_listening:
             return
 
+        # Load whisper model now
+        self.model = _ensure_whisper()
+
         self.is_listening = True
         self._listen_thread = threading.Thread(target=self._listen_loop, daemon=True)
         self._listen_thread.start()
-        print("🎤 Prometheus listening... Say 'Hey Prometheus' to wake")
+        print("[voice] Prometheus listening... Say 'Hey Prometheus' to wake")
 
     def stop(self):
         """Stop listening"""
@@ -79,31 +114,71 @@ class VoiceListener:
         if self._listen_thread:
             self._listen_thread.join(timeout=2.0)
 
+    def _record_audio(self, duration: float = 5.0) -> np.ndarray:
+        """Record audio from microphone"""
+        frames = int(duration * self.SAMPLE_RATE)
+
+        print("[voice] Listening...", end=" ", flush=True)
+        audio = self.sd.rec(
+            frames,
+            samplerate=self.SAMPLE_RATE,
+            channels=self.CHANNELS,
+            dtype=self.DTYPE
+        )
+        self.sd.wait()  # Wait for recording to finish
+        print("done")
+
+        return audio.flatten()
+
+    def _transcribe(self, audio: np.ndarray) -> Optional[str]:
+        """Transcribe audio using Whisper"""
+        if self.model is None:
+            return None
+
+        try:
+            # Whisper expects float32 audio normalized to [-1, 1]
+            audio = audio.astype(np.float32)
+
+            # Transcribe
+            result = self.model.transcribe(
+                audio,
+                language="en",
+                fp16=False  # Use fp32 for CPU
+            )
+
+            text = result["text"].strip()
+            if text:
+                return text
+
+        except Exception as e:
+            print(f"[voice] Transcription error: {e}")
+
+        return None
+
     def _listen_loop(self):
         """Main listening loop"""
-        sr = _ensure_speech_recognition()
-
         while self.is_listening:
             try:
-                with self.microphone as source:
-                    audio = self.recognizer.listen(
-                        source,
-                        timeout=5,
-                        phrase_time_limit=10
-                    )
+                # Record audio chunk
+                audio = self._record_audio(duration=5.0)
+
+                # Skip if too quiet (silence detection)
+                if np.abs(audio).max() < 0.01:
+                    continue
 
                 # Transcribe
                 text = self._transcribe(audio)
                 if not text:
                     continue
 
+                print(f"[voice] Heard: {text}")
                 text_lower = text.lower()
 
                 # Check for wake word
                 if not self.is_awake:
                     if any(wake in text_lower for wake in self.WAKE_WORDS):
                         self.is_awake = True
-                        self._notify("🟢 Prometheus awake. Listening for commands...")
+                        self._notify("[voice] Prometheus AWAKE. Listening for commands...")
 
                         # Extract command after wake word
                         for wake in self.WAKE_WORDS:
@@ -116,49 +191,23 @@ class VoiceListener:
                     # Already awake - process command directly
                     if "go to sleep" in text_lower or "stop listening" in text_lower:
                         self.is_awake = False
-                        self._notify("🔴 Prometheus sleeping. Say wake word to activate.")
+                        self._notify("[voice] Prometheus SLEEPING. Say wake word to activate.")
                     else:
                         self._process_command(text)
 
-            except sr.WaitTimeoutError:
-                continue
-            except sr.UnknownValueError:
-                continue
             except Exception as e:
-                print(f"Listen error: {e}")
-
-    def _transcribe(self, audio) -> Optional[str]:
-        """Transcribe audio to text"""
-        sr = _ensure_speech_recognition()
-
-        try:
-            if self.use_whisper:
-                # Local Whisper model (offline)
-                return self.recognizer.recognize_whisper(audio, model="base")
-            else:
-                # Google Speech Recognition (online, free)
-                return self.recognizer.recognize_google(audio)
-
-        except sr.UnknownValueError:
-            return None
-        except sr.RequestError as e:
-            print(f"API error: {e}")
-            # Fallback to Whisper if available
-            try:
-                return self.recognizer.recognize_whisper(audio, model="base")
-            except:
-                return None
+                print(f"[voice] Listen error: {e}")
 
     def _process_command(self, command: str):
         """Queue command for processing"""
-        print(f"🎤 Command: {command}")
+        print(f"[voice] Command: {command}")
         self.command_queue.put(command)
 
         for callback in self._callbacks:
             try:
                 callback(command)
             except Exception as e:
-                print(f"Callback error: {e}")
+                print(f"[voice] Callback error: {e}")
 
     def _notify(self, message: str):
         """Send notification"""
@@ -196,9 +245,28 @@ class VoiceListener:
     def wake(self):
         """Manually wake Prometheus"""
         self.is_awake = True
-        self._notify("🟢 Prometheus awake (manual)")
+        self._notify("[voice] Prometheus awake (manual)")
 
     def sleep(self):
         """Manually put Prometheus to sleep"""
         self.is_awake = False
-        self._notify("🔴 Prometheus sleeping (manual)")
+        self._notify("[voice] Prometheus sleeping (manual)")
+
+
+# Quick test
+if __name__ == "__main__":
+    print("Testing voice listener...")
+    listener = VoiceListener()
+    listener.on_command(lambda cmd: print(f">>> COMMAND: {cmd}"))
+    listener.start()
+
+    print("\nSay 'Hey Prometheus' followed by a command.")
+    print("Press Ctrl+C to stop.\n")
+
+    try:
+        while True:
+            import time
+            time.sleep(1)
+    except KeyboardInterrupt:
+        listener.stop()
+        print("\nStopped.")
