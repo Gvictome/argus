@@ -442,27 +442,22 @@ except Exception as e:
 '''
 
         try:
-            # Check if Windows Terminal is available
             if sys.platform == "win32":
-                # Try Windows Terminal first
-                try:
-                    process = subprocess.Popen(
-                        [
-                            'wt', '-w', '0', 'new-tab',
-                            '--title', f'{agent_type} agent',
-                            'python', '-c', agent_script
-                        ],
-                        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
-                    )
-                    return process.pid
-                except FileNotFoundError:
-                    # Fall back to regular cmd window
-                    process = subprocess.Popen(
-                        ['cmd', '/c', 'start', f'{agent_type} agent',
-                         'python', '-c', agent_script],
-                        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
-                    )
-                    return process.pid
+                # Write script to temp file
+                import tempfile
+                script_file = tempfile.NamedTemporaryFile(
+                    mode='w', suffix='.py', delete=False, prefix=f'agent_{agent_type}_'
+                )
+                script_file.write(agent_script)
+                script_file.close()
+
+                # Open a NEW CMD window for each agent
+                process = subprocess.Popen(
+                    f'start "{agent_type.upper()} AGENT" cmd /k python "{script_file.name}"',
+                    shell=True,
+                    creationflags=subprocess.CREATE_NEW_CONSOLE
+                )
+                return process.pid
             else:
                 # Linux/Mac - try common terminal emulators
                 terminals = [
