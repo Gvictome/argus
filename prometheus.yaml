@@ -1,0 +1,44 @@
+name: argus
+version: 0.1.0
+description: AI-Powered Home Security & Automation System
+
+industry: security
+
+plugins:
+  - camera
+  - detection
+  - automation
+  - mqtt
+  - homeassistant
+  - telegram
+  - discord
+  - database
+  - scheduler
+
+agents:
+  default:
+    - error
+    - security
+    - camera
+    - detection
+    - automation
+
+hardware:
+  platform: raspberry_pi_5
+  accelerator: hailo_8l
+  camera: pi_camera_module_3
+
+features:
+  - person_detection
+  - face_recognition
+  - motion_zones
+  - intrusion_alerts
+  - video_recording
+  - live_streaming
+  - home_automation
+
+integrations:
+  - home_assistant
+  - mqtt
+  - telegram
+  - discord

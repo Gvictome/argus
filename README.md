@@ -1,34 +1,49 @@
-# THE EYE
+# ARGUS
+## Autonomous Residential Guardian & Utility System
 
-**Offline-First Smart Home Security & Automation System**
+AI-Powered Home Security & Automation built on Raspberry Pi 5
 
-A self-hosted, privacy-focused smart home security system built on Raspberry Pi 5. Designed to replace Ring, Alexa, and other cloud-dependent services with fully local AI-powered surveillance and home automation.
+---
 
 ## Overview
 
-THE EYE is a modular security and automation platform that:
-- Detects motion, recognizes faces, and classifies objects using on-device AI
-- Controls home automation (lights, locks, thermostats, cameras)
-- Operates 100% offline with no cloud dependencies
-- Provides a web interface for monitoring and control
+ARGUS is a senior design project that creates an intelligent home security system using edge AI computing. The system provides real-time threat detection, face recognition, and smart home automation without cloud dependencies.
 
 ## Hardware
 
-| Component | SKU | Description |
-|-----------|-----|-------------|
-| Raspberry Pi 5 | - | Main compute unit |
-| Camera Module 3 | 46-1 | Primary vision input |
-| HighPi Pro 5S Case | 9015 | Enclosure with ventilation |
-| USB-C PD Power Supply | 492-2 | 27W power delivery |
-| Active Cooler | 374-1 | Thermal management |
-| MicroSD Card | 1350-1 | 32GB with Raspberry Pi OS |
-| AI Hat+ 2 | - | Neural network accelerator (optional) |
+| Component | Model | Description |
+|-----------|-------|-------------|
+| SBC | Raspberry Pi 5 (8GB) | Main compute unit |
+| AI Accelerator | Raspberry Pi AI HAT+ (Hailo-8L, 26 TOPS) | Neural network accelerator |
+| Camera | Raspberry Pi Camera Module 3 (12MP) | Primary vision input |
+| Enclosure | HighPi Pro 5S Case | Enclosure with ventilation |
+| Power | USB-C PD Power Supply | 27W power delivery |
+| Cooling | Active Cooler | Thermal management |
+
+## Features
+
+- Real-time person/object detection (YOLOv8)
+- Face recognition (known vs unknown)
+- Motion zones with alerts
+- Video recording on events
+- Live streaming (HLS/WebRTC)
+- Home Assistant integration
+- Push notifications (Telegram/Discord)
+- 100% offline operation - no cloud dependencies
+
+## Team
+
+| Name | Role | Focus |
+|------|------|-------|
+| Christian | Electrical Engineer | Hardware, sensors, power |
+| Giovanny | Computer Engineer | AI/ML, detection, optimization |
+| Mohammed | Computer Engineer | Backend, API, integrations |
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                        THE EYE                               │
+│                         ARGUS                                │
 ├─────────────────────────────────────────────────────────────┤
 │  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐        │
 │  │ Camera  │  │   AI    │  │  Home   │  │ Security│        │
@@ -40,67 +55,10 @@ THE EYE is a modular security and automation platform that:
 │  └────────────────────┬───────────────────────────┘        │
 │                       │                                     │
 │  ┌────────────────────┴───────────────────────────┐        │
-│  │           Streamlit / Web UI                    │        │
+│  │              Web Dashboard (Next.js)            │        │
 │  └─────────────────────────────────────────────────┘        │
 └─────────────────────────────────────────────────────────────┘
 ```
-
-## Project Structure
-
-```
-THE EYE/
-├── src/
-│   ├── api/            # FastAPI routes and endpoints
-│   ├── agents/         # AI agent orchestration
-│   ├── camera/         # Camera capture and streaming
-│   ├── detection/      # Motion, face, object detection
-│   ├── automation/     # Home automation controls
-│   ├── security/       # Encryption, auth, logging
-│   └── database/       # Local data storage
-├── docs/               # Documentation
-├── tests/              # Unit and integration tests
-├── config/             # Configuration files
-├── static/             # Web assets
-├── requirements.txt    # Python dependencies
-└── main.py            # Application entry point
-```
-
-## Quick Start
-
-### 1. Hardware Setup
-See [docs/HARDWARE.md](docs/HARDWARE.md) for assembly instructions.
-
-### 2. Software Installation
-```bash
-# Clone and enter project
-cd THE_EYE
-
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # Linux/macOS
-# or: venv\Scripts\activate  # Windows
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Run the system
-python main.py
-```
-
-### 3. Access the Dashboard
-Open `http://<pi-ip>:8000` in your browser.
-
-## Agent System
-
-THE EYE uses a multi-agent architecture:
-
-| Agent | Role |
-|-------|------|
-| **Sentinel Prime** | Lead orchestrator, delegates tasks |
-| **Engineer-Bot** | GPIO, sensors, power management |
-| **Code-Mage** | Python, FastAPI, AI model integration |
-| **Sentinel-Guard** | Security, encryption, firewalling |
-| **DocuBot** | Documentation, API references |
 
 ## Detection Pipeline
 
@@ -109,23 +67,72 @@ Camera Stream → Motion Detection → Object Classification
                                           │
                     ┌─────────────────────┼─────────────────────┐
                     │                     │                     │
-               Known Face            Unknown Human           Animal
+               Known Face            Unknown Human           Object
                     │                     │                     │
-                Log Entry            Alert + Chat           Log + Save
+                Log Entry            Alert + Record         Log + Save
 ```
+
+## Quick Start
+
+```bash
+# Clone repository
+git clone https://github.com/Gvictome/argus.git
+cd argus
+
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate  # Linux/Mac
+# or: .\venv\Scripts\activate  # Windows
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Run ARGUS
+python -m src.main
+```
+
+## Project Structure
+
+```
+argus/
+├── config/          # Configuration files
+├── src/             # Source code
+│   ├── core/        # Main controller
+│   ├── capture/     # Camera & sensors
+│   ├── detection/   # AI models
+│   ├── actions/     # Alerts & automation
+│   └── api/         # REST API
+├── web/             # Next.js dashboard
+├── tests/           # Test suite
+└── docs/            # Documentation
+```
+
+## Documentation
+
+- [Project Proposal](docs/PROPOSAL.md)
+- [Team Tasks](TEAM_TASKS.md)
+- [Web App Architecture](docs/WEB_APP_ARCHITECTURE.md)
+- [API Documentation](docs/api.md)
+
+## Timeline
+
+- **Weeks 1-4:** Hardware setup & core infrastructure
+- **Weeks 5-8:** AI integration (YOLO + Face Recognition)
+- **Weeks 9-12:** Automation & alert system
+- **Weeks 13-14:** Web app & cloud deployment
+- **Weeks 15-16:** Testing & documentation
 
 ## Security Features
 
-- All data stored locally (no cloud)
+- All data stored locally (no cloud required)
 - Encrypted biometric storage
-- Firewall-hardened endpoints
-- No external API dependencies
+- Secure API endpoints
 - Audit logging for all events
 
 ## License
 
-Private / Internal Use
+MIT License - Senior Design Project 2026
 
-## Contributing
+---
 
-This is a personal project. Contact the owner for collaboration.
+*Powered by Prometheus AI Orchestrator*
