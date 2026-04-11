@@ -50,15 +50,6 @@ class ModelManager:
 
         If model_path is given and exists, loads from that checkpoint;
         otherwise falls back to the default pretrained yolov8n.pt weights.
-
-        Args:
-            model_path: Optional path to a .pt checkpoint file.
-
-        Returns:
-            Loaded YOLO model instance.
-
-        Raises:
-            RuntimeError: If ultralytics is not installed.
         """
         if not _ULTRALYTICS_AVAILABLE:
             raise RuntimeError(
@@ -66,17 +57,25 @@ class ModelManager:
                 "Install it with: pip install ultralytics"
             )
 
+        # Default fallback logic
+        default_model_name = "yolov8n.pt"
+        # 1. Try absolute path provided
+        # 2. Try current directory
+        # 3. Try src/ directory relative to this file
+        src_path = Path(__file__).parent.parent / default_model_name
+
         if model_path is not None and Path(model_path).exists():
             logger.info("Loading YOLOv8n from checkpoint: %s", model_path)
             self.model = _YOLO(str(model_path))
+        elif Path(default_model_name).exists():
+            logger.info("Loading %s from current directory", default_model_name)
+            self.model = _YOLO(default_model_name)
+        elif src_path.exists():
+            logger.info("Loading %s from src directory: %s", default_model_name, src_path)
+            self.model = _YOLO(str(src_path))
         else:
-            if model_path is not None:
-                logger.warning(
-                    "Checkpoint not found at %s — falling back to pretrained yolov8n.pt",
-                    model_path,
-                )
-            logger.info("Loading pretrained yolov8n.pt")
-            self.model = _YOLO("yolov8n.pt")
+            logger.info("Model not found locally, downloading pretrained %s", default_model_name)
+            self.model = _YOLO(default_model_name)
 
         return self.model
 
