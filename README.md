@@ -33,6 +33,8 @@ ARGUS is a senior design project that creates an intelligent home security syste
 
 ## Team
 
+| Name | Role | Focus |
+|------|------|-------|
 | Christian | Electrical Engineer | Hardware, sensors, power |
 | Giovanny | Computer Engineer | AI/ML, detection, optimization |
 | Mohammed | Computer Engineer | Backend, API, integrations |
