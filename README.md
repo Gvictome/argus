@@ -129,10 +129,9 @@ argus/
 - Secure API endpoints
 - Audit logging for all events
 
-## License
+---
 
 MIT License - Senior Design Project 2026
 
 ---
 
-*Powered by Prometheus AI Orchestrator*
