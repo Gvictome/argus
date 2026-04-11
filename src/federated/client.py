@@ -171,3 +171,18 @@ def start_client(server_url: str, client: ArgusFlowerClient) -> None:
         client=client,
     )
     logger.info("FL client finished")
+
+
+if __name__ == "__main__":
+    from src.detection.models import ModelManager
+    from src.training import LocalTrainer
+    from src.config import settings
+
+    logging.basicConfig(level=logging.INFO)
+
+    model_manager = ModelManager()
+    model_manager.load_model()
+    trainer = LocalTrainer(model_manager, settings)
+    client = ArgusFlowerClient(model_manager, trainer, settings)
+    
+    start_client(settings.FL_SERVER_URL, client)
