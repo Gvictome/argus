@@ -69,6 +69,7 @@ class AgentRouter:
         "network": {"class": "NetworkAgent", "module": "src.agents.network_agent"},
         "syntax": {"class": "SyntaxAgent", "module": "src.agents.syntax_agent"},
         "hardware": {"class": "HardwareAgent", "module": "src.agents.hardware_agent"},
+        "federated": {"class": "FederatedAgent", "module": "src.agents.federated_agent"},
         "camera": {"class": "CameraService", "module": "src.camera"},
         "detection": {"class": "DetectionService", "module": "src.detection"},
         "automation": {"class": "AutomationService", "module": "src.automation"},

@@ -47,10 +47,23 @@ class Settings:
     # Automation
     AUTOMATION_ENABLED: bool = True
 
+    # Federated Learning
+    FL_ENABLED: bool = False
+    FL_SERVER_URL: str = "localhost:8080"
+    FL_LOCAL_EPOCHS: int = 5
+    FL_MIN_SAMPLES: int = 50
+    FL_ROUND_HOUR: int = 2  # 2 AM
+    FL_TRAINING_DIR: Optional[Path] = None  # set in __post_init__
+
     def __post_init__(self):
         """Create directories if they don't exist"""
         self.DATA_DIR.mkdir(parents=True, exist_ok=True)
         self.MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+
+        # Set FL training dir under DATA_DIR and create it
+        if self.FL_TRAINING_DIR is None:
+            self.FL_TRAINING_DIR = self.DATA_DIR / "training"
+        self.FL_TRAINING_DIR.mkdir(parents=True, exist_ok=True)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -64,6 +77,12 @@ class Settings:
             MOTION_SENSITIVITY=int(os.getenv("MOTION_SENSITIVITY", 25)),
             DETECTION_THRESHOLD=float(os.getenv("DETECTION_THRESHOLD", 0.5)),
             FACE_RECOGNITION_THRESHOLD=float(os.getenv("FACE_RECOGNITION_THRESHOLD", 0.6)),
+            # Federated Learning
+            FL_ENABLED=os.getenv("FL_ENABLED", "false").lower() == "true",
+            FL_SERVER_URL=os.getenv("FL_SERVER_URL", "localhost:8080"),
+            FL_LOCAL_EPOCHS=int(os.getenv("FL_LOCAL_EPOCHS", 5)),
+            FL_MIN_SAMPLES=int(os.getenv("FL_MIN_SAMPLES", 50)),
+            FL_ROUND_HOUR=int(os.getenv("FL_ROUND_HOUR", 2)),
         )
 
 

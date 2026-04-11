@@ -48,6 +48,11 @@ httpx>=0.26.0
 # UI (Optional)
 streamlit>=1.31.0
 
+# Federated Learning (install for FL features)
+# flwr>=1.13.0
+# ultralytics>=8.0.0
+# torch>=2.0.0
+
 # Development
 pytest>=8.0.0
 pytest-asyncio>=0.23.0

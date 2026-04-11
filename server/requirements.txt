@@ -1,0 +1,9 @@
+# ARGUS FL Server Dependencies
+# ==============================
+# Install on the central aggregation server (NOT on Raspberry Pi nodes).
+#
+# Usage:
+#   pip install -r server/requirements.txt
+
+flwr>=1.13.0
+numpy>=1.26.0
