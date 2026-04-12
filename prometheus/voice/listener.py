@@ -69,15 +69,17 @@ class VoiceListener:
     CHANNELS = 1
     DTYPE = np.float32
 
-    def __init__(self, model_size: str = "base"):
+    def __init__(self, model_size: str = "base", device: Optional[int] = None):
         """
         Initialize voice listener
 
         Args:
             model_size: Whisper model size (tiny, base, small, medium, large)
+            device: Optional audio device index
         """
         self.sd = _ensure_sounddevice()
         self.model_size = model_size
+        self.device = device
         self.model = None  # Lazy load
 
         self.command_queue: Queue = Queue()
@@ -89,9 +91,12 @@ class VoiceListener:
         # Check microphone
         print("[voice] Checking microphone...")
         try:
-            devices = self.sd.query_devices()
-            default_input = self.sd.query_devices(kind='input')
-            print(f"[voice] Using: {default_input['name']}")
+            if self.device is not None:
+                device_info = self.sd.query_devices(self.device)
+                print(f"[voice] Using manual device: {device_info['name']}")
+            else:
+                default_input = self.sd.query_devices(kind='input')
+                print(f"[voice] Using default: {default_input['name']}")
         except Exception as e:
             print(f"[voice] Warning: {e}")
 
@@ -123,7 +128,8 @@ class VoiceListener:
             frames,
             samplerate=self.SAMPLE_RATE,
             channels=self.CHANNELS,
-            dtype=self.DTYPE
+            dtype=self.DTYPE,
+            device=self.device
         )
         self.sd.wait()  # Wait for recording to finish
         print("done")

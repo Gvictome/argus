@@ -1,0 +1,12 @@
+apiVersion: 1
+
+providers:
+  - name: "Argus"
+    orgId: 1
+    folder: "Argus"
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

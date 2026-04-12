@@ -1,0 +1,6 @@
+flask
+flask-cors
+prometheus-client
+flwr
+numpy
+gunicorn

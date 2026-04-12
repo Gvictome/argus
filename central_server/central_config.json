@@ -1,0 +1,13 @@
+{
+    "fl_server_address": "0.0.0.0:8080",
+    "api_port": 8090,
+    "min_clients": 1,
+    "rounds": 50,
+    "eval_every_n_rounds": 1,
+    "local_epochs": 3,
+    "batch_size": 16,
+    "learning_rate": 0.001,
+    "checkpoint_dir": "./checkpoints",
+    "auth_token": "",
+    "node_scrape_targets": []
+}

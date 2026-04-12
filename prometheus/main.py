@@ -57,16 +57,18 @@ class Prometheus:
     - Handles plugin systems
     """
 
-    def __init__(self, workspace: Path = None, use_voice: bool = True):
+    def __init__(self, workspace: Path = None, use_voice: bool = True, audio_device: int = None):
         """
         Initialize Prometheus
 
         Args:
             workspace: Root directory for projects
             use_voice: Enable voice input (requires microphone)
+            audio_device: Optional audio device index
         """
         self.workspace = workspace or Path.home() / "prometheus_workspace"
         self.use_voice = use_voice
+        self.audio_device = audio_device
 
         # Core components
         self.parser = CommandParser()
@@ -77,7 +79,7 @@ class Prometheus:
         self.listener = None
         if use_voice:
             try:
-                self.listener = VoiceListener()
+                self.listener = VoiceListener(device=self.audio_device)
             except ImportError as e:
                 print(f"⚠️  Voice disabled: {e}")
                 self.use_voice = False
@@ -210,12 +212,19 @@ async def main():
         action="store_true",
         help="Disable voice input (text mode only)"
     )
+    parser.add_argument(
+        "--audio-device",
+        type=int,
+        default=None,
+        help="Audio device index"
+    )
 
     args = parser.parse_args()
 
     prometheus = Prometheus(
         workspace=args.workspace,
-        use_voice=not args.no_voice
+        use_voice=not args.no_voice,
+        audio_device=args.audio_device
     )
 
     await prometheus.start()

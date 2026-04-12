@@ -1,0 +1,15 @@
+{
+    "server_address": "localhost:8080",
+    "central_api": "http://localhost:8090",
+    "role": "client",
+    "node_id": "pi-frontporch",
+    "min_clients": 2,
+    "rounds": 50,
+    "local_epochs": 3,
+    "batch_size": 16,
+    "learning_rate": 0.001,
+    "model_dir": "models",
+    "data_dir": "fl_data",
+    "auth_token": "",
+    "register_on_startup": true
+}

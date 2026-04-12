@@ -1,0 +1,9 @@
+{
+    "backend": "mock",
+    "subcarriers": 52,
+    "frame_rate": 100.0,
+    "window_size": 100,
+    "motion_threshold": 2.0,
+    "esp32_port": 5500,
+    "skeleton_model": ""
+}

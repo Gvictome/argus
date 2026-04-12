@@ -1,0 +1,27 @@
+# Cloudflare Tunnel for Argus Edge Node (Pi)
+# ────────────────────────────────────────────
+# Exposes the Pi's Flask server so the central Prometheus can scrape it.
+#
+# Setup on each Pi:
+#   1. Install cloudflared (arm64):
+#        curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64.deb -o cloudflared.deb
+#        sudo dpkg -i cloudflared.deb
+#   2. Authenticate: cloudflared tunnel login
+#   3. Create tunnel: cloudflared tunnel create argus-pi-<NODE_NAME>
+#   4. Route DNS: cloudflared tunnel route dns argus-pi-<NODE_NAME> pi-<NODE_NAME>.argus.yourdomain.com
+#   5. Copy this file to ~/.cloudflared/config.yml
+#   6. Install as service: sudo cloudflared service install
+#
+# The Pi's /metrics endpoint will then be scrapeable at:
+#   https://pi-<NODE_NAME>.argus.yourdomain.com/metrics
+
+tunnel: argus-pi-frontporch
+credentials-file: /home/viccia/.cloudflared/credentials.json
+
+ingress:
+  # Argus Flask API (includes /metrics for Prometheus scraping)
+  - hostname: pi-frontporch.argus.yourdomain.com
+    service: http://localhost:5000
+
+  # Catch-all
+  - service: http_status:404

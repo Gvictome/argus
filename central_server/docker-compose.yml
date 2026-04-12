@@ -1,0 +1,93 @@
+version: "3.8"
+
+# ─────────────────────────────────────────────────────────
+# Argus Central Server Stack
+# ─────────────────────────────────────────────────────────
+# Runs: FL Aggregator + Prometheus + Grafana + Cloudflare Tunnel
+#
+# Quick start:
+#   docker compose up -d
+#
+# With auth:
+#   ARGUS_AUTH_TOKEN=mysecrettoken docker compose up -d
+#
+# Access:
+#   Grafana:    http://localhost:3000 (admin/argus)
+#   Prometheus: http://localhost:9090
+#   FL API:     http://localhost:8090/api/status
+#   FL gRPC:    localhost:8080 (Flower clients connect here)
+# ─────────────────────────────────────────────────────────
+
+services:
+  fl-aggregator:
+    build: .
+    container_name: argus-fl-aggregator
+    ports:
+      - "8080:8080"   # Flower gRPC (FL clients connect here)
+      - "8090:8090"   # REST API + /metrics
+    volumes:
+      - fl-checkpoints:/data/checkpoints
+      - ./central_config.json:/app/central_config.json:ro
+    environment:
+      - ARGUS_AUTH_TOKEN=${ARGUS_AUTH_TOKEN:-}
+      - ARGUS_MIN_CLIENTS=${ARGUS_MIN_CLIENTS:-1}
+      - ARGUS_ROUNDS=${ARGUS_ROUNDS:-50}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8090/api/status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: argus-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=30d"
+      - "--web.enable-lifecycle"
+    depends_on:
+      - fl-aggregator
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: argus-grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-argus}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=${GRAFANA_ROOT_URL:-http://localhost:3000}
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  # Optional: Cloudflare Tunnel — uncomment and configure
+  # cloudflared:
+  #   image: cloudflare/cloudflared:latest
+  #   container_name: argus-cloudflared
+  #   command: tunnel run
+  #   volumes:
+  #     - ./cloudflared.yml:/etc/cloudflared/config.yml:ro
+  #     - ${CLOUDFLARED_CREDS:-./credentials.json}:/etc/cloudflared/credentials.json:ro
+  #   depends_on:
+  #     - fl-aggregator
+  #     - grafana
+  #     - prometheus
+  #   restart: unless-stopped
+
+volumes:
+  fl-checkpoints:
+  prometheus-data:
+  grafana-data:

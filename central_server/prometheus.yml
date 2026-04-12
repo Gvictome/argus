@@ -1,0 +1,23 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Central FL aggregation server metrics
+  - job_name: "argus-central"
+    static_configs:
+      - targets: ["fl-aggregator:8090"]
+        labels:
+          role: "aggregator"
+
+  # Auto-discover edge nodes via HTTP SD
+  # Nodes register with the central server and are auto-added as scrape targets
+  - job_name: "argus-edge"
+    http_sd_configs:
+      - url: "http://fl-aggregator:8090/api/prometheus/targets"
+        refresh_interval: 30s
+
+  # Prometheus self-monitoring
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]

@@ -1,0 +1,40 @@
+# Cloudflare Tunnel Configuration for Argus Central Server
+# ─────────────────────────────────────────────────────────
+# Setup:
+#   1. Install cloudflared: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/
+#   2. Authenticate: cloudflared tunnel login
+#   3. Create tunnel: cloudflared tunnel create argus-central
+#   4. Route DNS:
+#        cloudflared tunnel route dns argus-central fl.argus.yourdomain.com
+#        cloudflared tunnel route dns argus-central grafana.argus.yourdomain.com
+#        cloudflared tunnel route dns argus-central prometheus.argus.yourdomain.com
+#   5. Copy this file to ~/.cloudflared/config.yml (or run with --config flag)
+#   6. Run: cloudflared tunnel run argus-central
+
+tunnel: argus-central
+credentials-file: /etc/cloudflared/credentials.json
+
+ingress:
+  # FL Aggregation Server REST API (monitoring, node registration)
+  - hostname: fl.argus.yourdomain.com
+    service: http://localhost:8090
+    originRequest:
+      noTLSVerify: true
+
+  # Grafana dashboards
+  - hostname: grafana.argus.yourdomain.com
+    service: http://localhost:3000
+
+  # Prometheus (optional — restrict access via Cloudflare Access policies)
+  - hostname: prometheus.argus.yourdomain.com
+    service: http://localhost:9090
+
+  # Flower FL gRPC server — Pi clients connect here for FL rounds
+  # Note: gRPC requires special config
+  - hostname: flower.argus.yourdomain.com
+    service: tcp://localhost:8080
+    originRequest:
+      proxyType: ""
+
+  # Catch-all
+  - service: http_status:404
