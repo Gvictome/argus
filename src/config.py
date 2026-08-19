@@ -33,7 +33,13 @@ class Settings:
     # Detection
     MOTION_SENSITIVITY: int = 25
     DETECTION_THRESHOLD: float = 0.5
+    # Haar-cascade face *detection* confidence placeholder (no identity).
     FACE_RECOGNITION_THRESHOLD: float = 0.6
+    # ArcFace cosine-similarity threshold for face *identity* matching.
+    # Typical usable range is 0.3-0.5; higher is stricter. Raising this
+    # trades false accepts for false rejects, which is the safer direction
+    # for a live demo. See FaceRecognitionService.similarity_threshold.
+    FACE_SIMILARITY_THRESHOLD: float = 0.4
 
     # Storage
     DATA_DIR: Path = DATA_DIR
@@ -77,6 +83,7 @@ class Settings:
             MOTION_SENSITIVITY=int(os.getenv("MOTION_SENSITIVITY", 25)),
             DETECTION_THRESHOLD=float(os.getenv("DETECTION_THRESHOLD", 0.5)),
             FACE_RECOGNITION_THRESHOLD=float(os.getenv("FACE_RECOGNITION_THRESHOLD", 0.6)),
+            FACE_SIMILARITY_THRESHOLD=float(os.getenv("FACE_SIMILARITY_THRESHOLD", 0.4)),
             # Federated Learning
             FL_ENABLED=os.getenv("FL_ENABLED", "false").lower() == "true",
             FL_SERVER_URL=os.getenv("FL_SERVER_URL", "localhost:8080"),

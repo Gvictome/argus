@@ -256,7 +256,7 @@ class DetectionService:
         """
         Detect and optionally identify faces in a frame.
 
-        If a FaceRecognitionService is attached, uses dlib-based 128-d
+        If a FaceRecognitionService is attached, uses ArcFace 512-d
         embeddings for identity matching.  Otherwise falls back to Haar
         cascade detection only (no identity).
 
@@ -354,5 +354,11 @@ class DetectionService:
         """Release model references and reset state."""
         self.object_model = None
         self.face_cascade = None
+        self.face_recognizer = None
         self.previous_frame = None
         logger.info("DetectionService shut down")
+
+
+# Global detection service instance (mirrors `camera_service` in src.camera).
+# Initialized at application startup; see src/api/app.py.
+detection_service = DetectionService()

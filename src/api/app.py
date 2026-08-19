@@ -2,6 +2,8 @@
 FastAPI application factory
 """
 
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -12,6 +14,8 @@ from src.detection.models import ModelManager
 from src.training import LocalTrainer
 from src.federated.client import ArgusFlowerClient
 from src.federated.scheduler import FLScheduler
+
+logger = logging.getLogger(__name__)
 
 # Module-level reference for route access
 _face_recognizer = None
@@ -62,17 +66,28 @@ def create_app() -> FastAPI:
         db.initialize()
         app.state.db = db
 
+        # Initialize detection service (motion -> YOLO -> faces)
+        from src.detection import detection_service
+        detection_service.initialize()
+        app.state.detection_service = detection_service
+
         # Initialize face recognition service
         try:
             from src.detection.face_recognition import FaceRecognitionService
             _face_recognizer = FaceRecognitionService(
                 db=db,
-                tolerance=settings.FACE_RECOGNITION_THRESHOLD,
+                similarity_threshold=settings.FACE_SIMILARITY_THRESHOLD,
             )
             app.state.face_recognizer = _face_recognizer
-        except RuntimeError:
-            # face_recognition library not installed — skip
-            pass
+            # Without this the pipeline silently falls back to Haar cascade
+            # detection and never resolves identity.
+            detection_service.attach_face_recognizer(_face_recognizer)
+        except Exception as exc:
+            # insightface/onnxruntime missing, or model download failed.
+            # Detection still runs; identity matching is disabled.
+            _face_recognizer = None
+            app.state.face_recognizer = None
+            logger.warning("Face recognition unavailable: %s", exc)
 
         # Start Federated Learning scheduler if enabled
         if settings.FL_ENABLED:
@@ -86,6 +101,10 @@ def create_app() -> FastAPI:
     @app.on_event("shutdown")
     async def shutdown_event():
         """Cleanup on shutdown"""
+        # Shut down detection service
+        if hasattr(app.state, "detection_service"):
+            app.state.detection_service.shutdown()
+
         # Close database
         if hasattr(app.state, "db"):
             app.state.db.shutdown()
