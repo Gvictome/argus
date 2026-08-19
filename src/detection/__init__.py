@@ -85,6 +85,7 @@ class DetectionService:
         self.config = config or DetectionConfig()
         self.object_model = None      # YOLOv8n YOLO instance
         self.face_cascade = None      # cv2.CascadeClassifier
+        self.face_recognizer = None   # FaceRecognitionService (set via attach_face_recognizer)
         self.previous_frame = None    # for frame differencing
 
     def initialize(self) -> bool:
@@ -253,19 +254,36 @@ class DetectionService:
 
     def recognize_faces(self, frame: np.ndarray) -> List[Detection]:
         """
-        Detect faces in a frame using the OpenCV Haar cascade.
+        Detect and optionally identify faces in a frame.
 
-        Full face recognition (identity matching) is not implemented in this
-        module; callers that need it should layer an embeddings model on top.
+        If a FaceRecognitionService is attached, uses dlib-based 128-d
+        embeddings for identity matching.  Otherwise falls back to Haar
+        cascade detection only (no identity).
 
         Args:
             frame: Current frame as numpy array (BGR).
 
         Returns:
-            List of face detections; empty if cascade not loaded.
+            List of face detections with face_id populated when recognized.
         """
         detections: List[Detection] = []
 
+        # Prefer FaceRecognitionService if available
+        if self.face_recognizer is not None:
+            matches = self.face_recognizer.recognize(frame)
+            for m in matches:
+                detections.append(
+                    Detection(
+                        type=DetectionType.FACE,
+                        confidence=m.confidence if m.face_id else self.config.face_recognition_threshold,
+                        bbox=m.bbox,
+                        label=m.name or "unknown",
+                        face_id=m.face_id,
+                    )
+                )
+            return detections
+
+        # Fallback: Haar cascade (detection only, no identity)
         if self.face_cascade is None:
             return detections
 
@@ -284,11 +302,21 @@ class DetectionService:
                     confidence=self.config.face_recognition_threshold,
                     bbox=(int(x), int(y), int(w), int(h)),
                     label="face",
-                    face_id=None,  # identity resolution not yet implemented
+                    face_id=None,
                 )
             )
 
         return detections
+
+    def attach_face_recognizer(self, recognizer) -> None:
+        """
+        Attach a FaceRecognitionService for identity-aware face detection.
+
+        Args:
+            recognizer: FaceRecognitionService instance.
+        """
+        self.face_recognizer = recognizer
+        logger.info("FaceRecognitionService attached to DetectionService")
 
     def process_frame(self, frame: np.ndarray) -> List[Detection]:
         """

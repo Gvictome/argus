@@ -163,15 +163,69 @@ async def detection_status():
 @router.get("/api/faces", tags=["Detection"])
 async def list_faces():
     """List all known faces"""
-    # TODO: Query database for faces
-    return {"faces": [], "count": 0}
+    try:
+        from src.api.app import get_face_recognizer
+        recognizer = get_face_recognizer()
+        if recognizer is None:
+            return {"faces": [], "count": 0, "error": "Face recognition not initialized"}
+        faces = recognizer.list_known_faces()
+        return {"faces": faces, "count": len(faces)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/api/faces", tags=["Detection"])
 async def add_face(name: str):
-    """Add a new face to the database"""
-    # TODO: Implement face enrollment
-    return {"message": f"Face enrollment started for {name}"}
+    """Enroll a new face by capturing a frame from the camera"""
+    try:
+        from src.camera import camera_service
+        from src.api.app import get_face_recognizer
+
+        recognizer = get_face_recognizer()
+        if recognizer is None:
+            raise HTTPException(status_code=503, detail="Face recognition not initialized")
+
+        if not camera_service.is_initialized:
+            raise HTTPException(status_code=503, detail="Camera not initialized")
+
+        import numpy as np
+        frame_bytes = camera_service.get_frame()
+        if frame_bytes is None:
+            raise HTTPException(status_code=500, detail="Failed to capture frame")
+
+        # Decode JPEG bytes to numpy array
+        frame = np.frombuffer(frame_bytes, dtype=np.uint8)
+        frame = __import__("cv2").imdecode(frame, __import__("cv2").IMREAD_COLOR)
+        if frame is None:
+            raise HTTPException(status_code=500, detail="Failed to decode frame")
+
+        face_id = recognizer.enroll_face(frame, name)
+        if face_id is None:
+            raise HTTPException(status_code=400, detail="No face detected in frame")
+
+        return {"message": f"Face enrolled for {name}", "face_id": face_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/api/faces/{face_id}", tags=["Detection"])
+async def remove_face(face_id: str):
+    """Remove a face from the database"""
+    try:
+        from src.api.app import get_face_recognizer
+        recognizer = get_face_recognizer()
+        if recognizer is None:
+            raise HTTPException(status_code=503, detail="Face recognition not initialized")
+        removed = recognizer.remove_face(face_id)
+        if not removed:
+            raise HTTPException(status_code=404, detail=f"Face {face_id} not found")
+        return {"message": f"Face {face_id} removed"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ============================================================================

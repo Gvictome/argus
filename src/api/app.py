@@ -13,9 +13,18 @@ from src.training import LocalTrainer
 from src.federated.client import ArgusFlowerClient
 from src.federated.scheduler import FLScheduler
 
+# Module-level reference for route access
+_face_recognizer = None
+
+
+def get_face_recognizer():
+    """Get the initialized FaceRecognitionService (or None)."""
+    return _face_recognizer
+
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application"""
+    global _face_recognizer
 
     app = FastAPI(
         title="THE EYE",
@@ -45,10 +54,25 @@ def create_app() -> FastAPI:
     @app.on_event("startup")
     async def startup_event():
         """Initialize services on startup"""
-        # TODO: Initialize camera service
-        # TODO: Initialize detection service
-        # TODO: Initialize automation service
-        # TODO: Initialize database
+        global _face_recognizer
+
+        # Initialize database
+        from src.database import Database
+        db = Database(settings.DB_PATH)
+        db.initialize()
+        app.state.db = db
+
+        # Initialize face recognition service
+        try:
+            from src.detection.face_recognition import FaceRecognitionService
+            _face_recognizer = FaceRecognitionService(
+                db=db,
+                tolerance=settings.FACE_RECOGNITION_THRESHOLD,
+            )
+            app.state.face_recognizer = _face_recognizer
+        except RuntimeError:
+            # face_recognition library not installed — skip
+            pass
 
         # Start Federated Learning scheduler if enabled
         if settings.FL_ENABLED:
@@ -62,8 +86,9 @@ def create_app() -> FastAPI:
     @app.on_event("shutdown")
     async def shutdown_event():
         """Cleanup on shutdown"""
-        # TODO: Stop camera stream
-        # TODO: Close database connections
+        # Close database
+        if hasattr(app.state, "db"):
+            app.state.db.shutdown()
 
         # Stop FL scheduler if running
         if hasattr(app.state, "fl_scheduler"):
