@@ -99,16 +99,30 @@ async def camera_snapshot():
 
 
 @router.get("/api/camera/stream", tags=["Camera"])
-async def camera_stream():
-    """Live MJPEG video stream"""
+async def camera_stream(detect_every: int = 3, quality: int = 80):
+    """
+    Live MJPEG video stream with detection overlays burned in.
+
+    Args:
+        detect_every: Run the detection cascade every Nth frame. Raise this
+            if the frame rate sags at the booth; boxes persist between runs.
+        quality: JPEG quality, 0-100.
+    """
     from fastapi.responses import StreamingResponse
     from src.camera import camera_service
+    from src.detection import detection_service
+    from src.detection.stream import stream_annotated_mjpeg
 
     if not camera_service.is_initialized:
         raise HTTPException(status_code=503, detail="Camera not initialized. Call /api/camera/init first")
 
     return StreamingResponse(
-        camera_service.stream_mjpeg(),
+        stream_annotated_mjpeg(
+            camera_service,
+            detection_service,
+            detect_every=detect_every,
+            jpeg_quality=quality,
+        ),
         media_type="multipart/x-mixed-replace; boundary=frame"
     )
 
