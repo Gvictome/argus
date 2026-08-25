@@ -165,13 +165,9 @@ async def camera_shutdown():
 
 @router.get("/api/detection/status", tags=["Detection"])
 async def detection_status():
-    """Get detection service status"""
-    return {
-        "status": "stopped",
-        "motion_detection": False,
-        "face_recognition": False,
-        "object_detection": False
-    }
+    """Get detection service status: FPS, backend, and which models are live."""
+    from src.detection import detection_service
+    return detection_service.status()
 
 
 @router.get("/api/faces", tags=["Detection"])
@@ -218,6 +214,27 @@ async def add_face(name: str):
             raise HTTPException(status_code=400, detail="No face detected in frame")
 
         return {"message": f"Face enrolled for {name}", "face_id": face_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/faces/reset", tags=["Detection"])
+async def reset_faces():
+    """
+    Clear every enrolled face (showcase P1-6).
+
+    Declared ahead of the /api/faces/{face_id} route so "reset" is never
+    read as a face id.
+    """
+    try:
+        from src.api.app import get_face_recognizer
+        recognizer = get_face_recognizer()
+        if recognizer is None:
+            raise HTTPException(status_code=503, detail="Face recognition not initialized")
+        removed = recognizer.reset()
+        return {"message": f"Cleared {removed} enrolled face(s)", "removed": removed}
     except HTTPException:
         raise
     except Exception as e:

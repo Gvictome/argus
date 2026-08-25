@@ -159,12 +159,31 @@ class Database:
             return [dict(row) for row in cursor.fetchall()]
 
     def update_face_seen(self, face_id: str):
-        """Update last_seen timestamp for a face"""
+        """
+        Update last_seen timestamp for a face.
+
+        Stored as an explicit ISO-8601 string: sqlite3's implicit datetime
+        adapter is deprecated as of Python 3.12, and this runs on every
+        recognized face.
+        """
         with self.get_cursor() as cursor:
             cursor.execute(
                 "UPDATE faces SET last_seen = ? WHERE id = ?",
-                (datetime.now(), face_id)
+                (datetime.now().isoformat(sep=" ", timespec="seconds"), face_id)
             )
+
+    def clear_faces(self) -> int:
+        """
+        Delete every enrolled face.
+
+        Returns:
+            Number of rows removed.
+        """
+        with self.get_cursor() as cursor:
+            cursor.execute("SELECT COUNT(*) FROM faces")
+            count = cursor.fetchone()[0]
+            cursor.execute("DELETE FROM faces")
+        return int(count)
 
     def delete_face(self, face_id: str) -> bool:
         """Delete a face"""

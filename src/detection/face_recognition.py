@@ -172,6 +172,23 @@ class FaceRecognitionService:
             logger.info("Removed face %s", face_id)
         return removed
 
+    def reset(self) -> int:
+        """
+        Remove every enrolled face from the database and the cache.
+
+        Showcase P1-6: over a multi-hour demo the known-faces database grows
+        with every passer-by who gets enrolled. An unpruned database degrades
+        match quality and eventually resolves the wrong identity in front of
+        a judge, which is a worse failure than not recognizing anyone.
+
+        Returns:
+            Number of faces removed.
+        """
+        removed = self.db.clear_faces()
+        self._known_faces.clear()
+        logger.info("Reset known-faces database — removed %d faces", removed)
+        return removed
+
     def recognize(self, frame: np.ndarray) -> List[FaceMatch]:
         """
         Detect and identify all faces in a frame.
