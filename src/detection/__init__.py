@@ -9,12 +9,16 @@ Handles:
 """
 
 import logging
+import time
+from collections import deque
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional, List, Tuple
 
 import cv2
 import numpy as np
+
+from src.config import BASE_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +67,11 @@ class Detection:
     face_id: Optional[str] = None
 
 
+# Frames retained for the rolling FPS average. Short enough that the number
+# tracks what the demo is doing right now rather than its lifetime mean.
+FPS_WINDOW = 30
+
+
 @dataclass
 class DetectionConfig:
     """Detection configuration"""
@@ -87,6 +96,9 @@ class DetectionService:
         self.face_cascade = None      # cv2.CascadeClassifier
         self.face_recognizer = None   # FaceRecognitionService (set via attach_face_recognizer)
         self.previous_frame = None    # for frame differencing
+        self.backend = "none"         # "hailo" | "cpu" | "none"
+        self._initialized = False
+        self._frame_times: deque = deque(maxlen=FPS_WINDOW)
 
     def initialize(self) -> bool:
         """
@@ -105,14 +117,21 @@ class DetectionService:
                 if hailo_model.exists():
                     logger.info("Optimized Hailo model found! Using AI HAT+ acceleration.")
                     self.object_model = _YOLO(str(hailo_model))
+                    self.backend = "hailo"
                 else:
                     logger.info("No Hailo model found. Using standard YOLOv8n (CPU).")
                     self.object_model = _YOLO("yolov8n.pt")
+                    self.backend = "cpu"
                 
                 logger.info("YOLO model loaded successfully")
             except Exception as exc:
-                logger.warning("Failed to load YOLO model: %s", exc)
+                # Loud on purpose. A silent fallback here disables object
+                # detection, and the cascade only reaches face recognition
+                # after YOLO reports a human -- so this failure reads on the
+                # demo as "face recognition is broken".
+                logger.error("Failed to load YOLO model: %s", exc, exc_info=True)
                 self.object_model = None
+                self.backend = "none"
         else:
             logger.info("Skipping YOLOv8.1 — ultralytics not available")
 
@@ -128,6 +147,8 @@ class DetectionService:
         except Exception as exc:
             logger.warning("Face cascade init failed: %s", exc)
             self.face_cascade = None
+
+        self._initialized = True
 
         logger.info(
             "DetectionService initialized — objects=%s faces=%s",
@@ -332,6 +353,7 @@ class DetectionService:
             All detections from all active models.
         """
         all_detections: List[Detection] = []
+        self._frame_times.append(time.monotonic())
 
         # Motion detection (fast, always runs)
         motion = self.detect_motion(frame)
@@ -342,13 +364,59 @@ class DetectionService:
             objects = self.detect_objects(frame)
             all_detections.extend(objects)
 
-            # Only run face detection if a human was detected
+            # Faces are the expensive stage, so normally they run only once
+            # YOLO has placed a human in the frame. When the object model is
+            # unavailable there are no human detections to gate on, and that
+            # gate would disable face recognition entirely -- so motion alone
+            # becomes sufficient.
             humans = [d for d in objects if d.type == DetectionType.HUMAN]
-            if humans:
+            if humans or self.object_model is None:
                 faces = self.recognize_faces(frame)
                 all_detections.extend(faces)
 
         return all_detections
+
+    def current_fps(self) -> float:
+        """
+        Processed frames per second over the last FPS_WINDOW frames.
+
+        Measured across the window's span rather than per-frame, so one slow
+        frame does not swing the reading. Returns 0.0 until two frames have
+        been processed, since a rate needs an interval.
+        """
+        if len(self._frame_times) < 2:
+            return 0.0
+
+        elapsed = self._frame_times[-1] - self._frame_times[0]
+        if elapsed <= 0:
+            return 0.0
+
+        return (len(self._frame_times) - 1) / elapsed
+
+    def status(self) -> dict:
+        """
+        Runtime state for GET /api/detection/status.
+
+        Reports what is actually loaded rather than what was configured: on
+        the Pi the useful question is whether the accelerator and the face
+        recognizer came up, not whether they were requested.
+        """
+        known_faces = 0
+        if self.face_recognizer is not None:
+            try:
+                known_faces = len(self.face_recognizer.list_known_faces())
+            except Exception as exc:
+                logger.warning("Could not count known faces: %s", exc)
+
+        return {
+            "status": "running" if self._initialized else "stopped",
+            "fps": round(self.current_fps(), 2),
+            "backend": self.backend,
+            "motion_detection": self._initialized,
+            "object_detection": self.object_model is not None,
+            "face_recognition": self.face_recognizer is not None,
+            "known_faces": known_faces,
+        }
 
     def shutdown(self) -> None:
         """Release model references and reset state."""
@@ -356,6 +424,9 @@ class DetectionService:
         self.face_cascade = None
         self.face_recognizer = None
         self.previous_frame = None
+        self.backend = "none"
+        self._initialized = False
+        self._frame_times.clear()
         logger.info("DetectionService shut down")
 
 
