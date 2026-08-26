@@ -79,6 +79,10 @@ class DetectionConfig:
     detection_threshold: float = 0.5
     face_recognition_threshold: float = 0.6
     min_detection_size: Tuple[int, int] = (30, 30)
+    # Frame differencing runs on a 1/N copy. The diff only locates *where*
+    # something moved, which survives downscaling, and the blur and dilate
+    # steps dominate the cost at full resolution. 1 disables scaling.
+    motion_detection_scale: int = 4
 
 
 class DetectionService:
@@ -178,9 +182,22 @@ class DetectionService:
 
         min_w, min_h = self.config.min_detection_size
 
+        # Work on a shrunken copy; boxes are scaled back to full-frame
+        # coordinates below so callers never see the reduced space.
+        scale = max(1, int(self.config.motion_detection_scale))
+        current, previous = frame, self.previous_frame
+        if scale > 1:
+            h, w = frame.shape[:2]
+            small = (max(1, w // scale), max(1, h // scale))
+            current = cv2.resize(frame, small, interpolation=cv2.INTER_NEAREST)
+            previous = cv2.resize(self.previous_frame, small, interpolation=cv2.INTER_NEAREST)
+            # The size filter is expressed in full-frame pixels.
+            min_w = max(1, min_w // scale)
+            min_h = max(1, min_h // scale)
+
         # Convert both frames to grayscale
-        gray_current = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        gray_previous = cv2.cvtColor(self.previous_frame, cv2.COLOR_BGR2GRAY)
+        gray_current = cv2.cvtColor(current, cv2.COLOR_BGR2GRAY)
+        gray_previous = cv2.cvtColor(previous, cv2.COLOR_BGR2GRAY)
 
         # Reduce noise before differencing
         gray_current = cv2.GaussianBlur(gray_current, (21, 21), 0)
@@ -216,7 +233,7 @@ class DetectionService:
                 Detection(
                     type=DetectionType.MOTION,
                     confidence=float(confidence),
-                    bbox=(x, y, w, h),
+                    bbox=(x * scale, y * scale, w * scale, h * scale),
                     label="motion",
                 )
             )

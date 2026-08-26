@@ -274,3 +274,45 @@ class TestLastSeenPersistence:
         last_seen = service.db.get_face(face_id)["last_seen"]
         assert isinstance(last_seen, str)
         datetime.fromisoformat(last_seen)  # raises if not a parseable timestamp
+
+
+class TestDetectorSize:
+    """
+    RetinaFace ran at 640x640 regardless of frame size. The stream now feeds
+    it 640x360 frames, so a 640x640 detection canvas buys nothing and costs
+    roughly 4x the pixels of 320x320.
+    """
+
+    def _service_recording_prepare(self, monkeypatch, tmp_path, **kwargs):
+        recorded = {}
+
+        class _Recording:
+            def __init__(self, name=None, providers=None):
+                pass
+
+            def prepare(self, ctx_id=0, det_size=(640, 640)):
+                recorded["det_size"] = det_size
+
+            def get(self, frame):
+                return []
+
+        monkeypatch.setattr(fr, "_INSIGHTFACE_AVAILABLE", True)
+        monkeypatch.setattr(fr, "_FaceAnalysis", _Recording)
+
+        db = Database(tmp_path / "t.db")
+        db.initialize()
+        FaceRecognitionService(db=db, **kwargs)
+        db.shutdown()
+        return recorded
+
+    def test_detector_defaults_to_320(self, monkeypatch, tmp_path):
+        recorded = self._service_recording_prepare(monkeypatch, tmp_path)
+
+        assert recorded["det_size"] == (320, 320)
+
+    def test_detector_size_is_still_overridable(self, monkeypatch, tmp_path):
+        recorded = self._service_recording_prepare(
+            monkeypatch, tmp_path, det_size=(640, 640)
+        )
+
+        assert recorded["det_size"] == (640, 640)

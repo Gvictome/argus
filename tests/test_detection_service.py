@@ -237,3 +237,55 @@ class TestStatus:
         service.process_frame(_frame(0))
 
         assert len(service._frame_times) == 2
+
+
+class TestMotionDownscale:
+    """
+    Motion detection ran cvtColor + GaussianBlur(21,21) + dilate at full
+    resolution, ~9ms per frame at 1080p before any model runs. The diff only
+    needs to find *where* something moved, which survives downscaling.
+    """
+
+    def _frame_with_block(self, x, y, w, h):
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+        frame[y:y + h, x:x + w] = 255
+        return frame
+
+    def test_motion_bbox_is_reported_in_full_frame_coordinates(self):
+        """The diff runs on a shrunken copy, so boxes must be scaled back or
+        every motion overlay lands in the wrong place."""
+        service = DetectionService(DetectionConfig(motion_detection_scale=4))
+
+        service.detect_motion(_frame(0))
+        detections = service.detect_motion(self._frame_with_block(200, 160, 160, 120))
+
+        assert detections, "no motion detected"
+        x, y, w, h = max(detections, key=lambda d: d.bbox[2] * d.bbox[3]).bbox
+
+        # Generous bounds on purpose: GaussianBlur(21,21) plus two dilate
+        # passes inflate every motion contour, at any scale. What this pins
+        # is the coordinate space -- dropping the scale multiply would put
+        # this box near (50, 40, 40, 30), nowhere near these bounds.
+        assert 170 <= x <= 210, f"x={x} not near 200"
+        assert 130 <= y <= 170, f"y={y} not near 160"
+        assert 150 <= w <= 210, f"w={w} not near 160"
+        assert 110 <= h <= 170, f"h={h} not near 120"
+
+    def test_scale_of_one_leaves_detection_at_full_resolution(self):
+        service = DetectionService(DetectionConfig(motion_detection_scale=1))
+
+        service.detect_motion(_frame(0))
+        detections = service.detect_motion(self._frame_with_block(200, 160, 160, 120))
+
+        assert detections
+        x, y, w, h = max(detections, key=lambda d: d.bbox[2] * d.bbox[3]).bbox
+        assert (x, y, w, h) == pytest.approx((200, 160, 160, 120), abs=14)
+
+    def test_small_motion_below_min_size_is_still_filtered(self):
+        """Downscaling must not let sub-threshold noise through as motion."""
+        service = DetectionService(DetectionConfig(motion_detection_scale=4))
+
+        service.detect_motion(_frame(0))
+        detections = service.detect_motion(self._frame_with_block(100, 100, 8, 8))
+
+        assert detections == []

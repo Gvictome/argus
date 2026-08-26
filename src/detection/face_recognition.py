@@ -65,13 +65,17 @@ class FaceRecognitionService:
     maintained for fast matching during live detection.
     """
 
-    def __init__(self, db, similarity_threshold: float = 0.4, det_size: Tuple[int, int] = (640, 640)):
+    def __init__(self, db, similarity_threshold: float = 0.4, det_size: Tuple[int, int] = (320, 320)):
         """
         Args:
             db: Database instance (src.database.Database) — must be initialized.
             similarity_threshold: Min cosine similarity to consider a match.
                                   ArcFace typical range: 0.3–0.5 depending on use case.
             det_size: Input size for the face detector (width, height).
+                      320x320 by default: the demo stream feeds 640x360
+                      frames, so a larger detection canvas costs pixels
+                      without adding detail. Raise it if faces need to be
+                      recognized further from the camera.
         """
         if not _INSIGHTFACE_AVAILABLE:
             raise RuntimeError(
