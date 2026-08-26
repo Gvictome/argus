@@ -99,7 +99,7 @@ async def camera_snapshot():
 
 
 @router.get("/api/camera/stream", tags=["Camera"])
-async def camera_stream(detect_every: int = 3, quality: int = 80):
+async def camera_stream(detect_every: int = 3, quality: int = 80, width: int = 640):
     """
     Live MJPEG video stream with detection overlays burned in.
 
@@ -107,6 +107,9 @@ async def camera_stream(detect_every: int = 3, quality: int = 80):
         detect_every: Run the detection cascade every Nth frame. Raise this
             if the frame rate sags at the booth; boxes persist between runs.
         quality: JPEG quality, 0-100.
+        width: Downscale frames wider than this before processing. The
+            camera captures 1080p and every stage scales with pixel count.
+            0 streams at full capture resolution.
     """
     from fastapi.responses import StreamingResponse
     from src.camera import camera_service
@@ -122,6 +125,7 @@ async def camera_stream(detect_every: int = 3, quality: int = 80):
             detection_service,
             detect_every=detect_every,
             jpeg_quality=quality,
+            max_width=width,
         ),
         media_type="multipart/x-mixed-replace; boundary=frame"
     )

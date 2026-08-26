@@ -138,3 +138,92 @@ class TestResilience:
         cam, det = FakeCamera(n_frames=2), FakeDetector()
         collect(stream_annotated_mjpeg(cam, det))
         assert cam.is_streaming is False
+
+
+class TestFrameScaling:
+    """
+    The camera captures 1920x1080, so every downstream stage -- motion diff,
+    YOLO, ArcFace, JPEG encode -- paid Full HD cost on a Pi CPU. Downscaling
+    once at capture makes all of them cheaper.
+    """
+
+    def test_wide_frames_are_downscaled_to_the_target_width(self):
+        import cv2
+
+        big = np.zeros((1080, 1920, 3), dtype=np.uint8)
+        cam, det = FakeCamera(n_frames=1, frame=big), FakeDetector()
+
+        chunk = collect(stream_annotated_mjpeg(cam, det, max_width=640))[0]
+        payload = chunk.split(b"\r\n\r\n", 1)[1].rstrip(b"\r\n")
+        img = cv2.imdecode(np.frombuffer(payload, np.uint8), cv2.IMREAD_COLOR)
+
+        assert img.shape[1] == 640
+
+    def test_downscaling_preserves_aspect_ratio(self):
+        import cv2
+
+        big = np.zeros((1080, 1920, 3), dtype=np.uint8)
+        cam, det = FakeCamera(n_frames=1, frame=big), FakeDetector()
+
+        chunk = collect(stream_annotated_mjpeg(cam, det, max_width=640))[0]
+        payload = chunk.split(b"\r\n\r\n", 1)[1].rstrip(b"\r\n")
+        img = cv2.imdecode(np.frombuffer(payload, np.uint8), cv2.IMREAD_COLOR)
+
+        assert img.shape[:2] == (360, 640)
+
+    def test_small_frames_are_never_upscaled(self):
+        """Upscaling costs time and adds no detail."""
+        import cv2
+
+        cam, det = FakeCamera(n_frames=1), FakeDetector()  # 160x120
+
+        chunk = collect(stream_annotated_mjpeg(cam, det, max_width=640))[0]
+        payload = chunk.split(b"\r\n\r\n", 1)[1].rstrip(b"\r\n")
+        img = cv2.imdecode(np.frombuffer(payload, np.uint8), cv2.IMREAD_COLOR)
+
+        assert img.shape[:2] == (120, 160)
+
+    def test_detector_sees_the_downscaled_frame(self):
+        """Boxes are drawn in the scaled frame's coordinate space, so the
+        detector must run on that same frame or every box lands wrong."""
+        big = np.zeros((1080, 1920, 3), dtype=np.uint8)
+        cam = FakeCamera(n_frames=1, frame=big)
+
+        seen = []
+
+        class RecordingDetector:
+            def process_frame(self, frame):
+                seen.append(frame.shape)
+                return []
+
+        collect(stream_annotated_mjpeg(cam, RecordingDetector(), max_width=640))
+
+        assert seen == [(360, 640, 3)]
+
+
+class TestFramePacing:
+    def test_slow_processing_does_not_also_wait_a_full_frame_interval(self):
+        """
+        The loop slept a full interval after finishing work, so frame time
+        was always work + interval. When work already exceeds the interval
+        the sleep is pure loss.
+        """
+        import time as _time
+
+        class SlowConfig:
+            framerate = 10          # 100ms interval
+
+        class SlowDetector:
+            def process_frame(self, frame):
+                _time.sleep(0.15)   # 150ms, already over the interval
+                return []
+
+        cam = FakeCamera(n_frames=3)
+        cam.config = SlowConfig()
+
+        start = _time.perf_counter()
+        collect(stream_annotated_mjpeg(cam, SlowDetector(), detect_every=1))
+        elapsed = _time.perf_counter() - start
+
+        # Unfixed: 3 * (150 + 100) = 750ms. Fixed: ~450ms.
+        assert elapsed < 0.65, f"loop still adds a full interval per frame ({elapsed:.3f}s)"
