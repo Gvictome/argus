@@ -145,6 +145,24 @@ ls ~/.insightface/models/buffalo_l
 
 ---
 
+## 3b. Fetch the threat-detection model
+
+Optional — needed only for the dangerous-person stage. Requires
+`ultralytics`, so skip it on a minimal install.
+
+```bash
+python scripts/fetch_models.py
+```
+
+Downloads YOLO11n (~10MB) from the upstream release, verifies its
+published SHA-256, and writes `models/threat-yolo11n.pt`. Do this while
+you have network; the demo unit runs offline.
+
+Without it the API still starts and logs `Threat detection unavailable`.
+See [`THREAT_DETECTION.md`](THREAT_DETECTION.md).
+
+---
+
 ## 4. Test without hardware
 
 Run this first on any device. It needs no camera, no InsightFace, and no
@@ -163,7 +181,7 @@ Full suite:
 python -m pytest tests/ -q
 ```
 
-Expected: **1 failed, 67 passed**. The one failure is
+Expected: **1 failed, 99 passed**. The one failure is
 `test_camera_status`, which is pre-existing and unrelated to this work
 (the camera status payload has no `status` key).
 

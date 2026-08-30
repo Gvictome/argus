@@ -84,6 +84,7 @@ class TestDetectionStatus:
             "motion_detection",
             "object_detection",
             "face_recognition",
+            "threat_detection",
             "known_faces",
         }
         assert isinstance(data["fps"], (int, float))

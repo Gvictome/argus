@@ -66,8 +66,15 @@ def create_app() -> FastAPI:
         db.initialize()
         app.state.db = db
 
-        # Initialize detection service (motion -> YOLO -> faces)
-        from src.detection import detection_service
+        # Initialize detection service (motion -> YOLO -> faces -> threat)
+        from src.detection import detection_service, DetectionConfig
+        # Without this the env vars in Settings never reach the pipeline:
+        # DetectionConfig's dataclass defaults silently won every time.
+        detection_service.config = DetectionConfig(
+            motion_threshold=settings.MOTION_SENSITIVITY,
+            detection_threshold=settings.DETECTION_THRESHOLD,
+            face_recognition_threshold=settings.FACE_RECOGNITION_THRESHOLD,
+        )
         detection_service.initialize()
         app.state.detection_service = detection_service
 
@@ -88,6 +95,25 @@ def create_app() -> FastAPI:
             _face_recognizer = None
             app.state.face_recognizer = None
             logger.warning("Face recognition unavailable: %s", exc)
+
+        # Initialize threat classification (dangerous-person stage)
+        app.state.threat_classifier = None
+        if settings.THREAT_ENABLED:
+            try:
+                from src.detection.threat import ThreatClassifier
+                _threat = ThreatClassifier(
+                    model_path=settings.THREAT_MODEL_PATH,
+                    confidence=settings.THREAT_CONFIDENCE,
+                    imgsz=settings.THREAT_IMGSZ,
+                )
+                app.state.threat_classifier = _threat
+                detection_service.attach_threat_classifier(_threat)
+            except Exception as exc:
+                # Weights not fetched, or ultralytics missing. Object
+                # detection and face recognition carry the demo unchanged.
+                logger.warning("Threat detection unavailable: %s", exc)
+        else:
+            logger.info("Threat detection disabled via THREAT_ENABLED")
 
         # Start Federated Learning scheduler if enabled
         if settings.FL_ENABLED:

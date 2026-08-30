@@ -39,9 +39,16 @@ class DetectionType(Enum):
     ANIMAL = "animal"
     VEHICLE = "vehicle"
     UNKNOWN = "unknown"
+    # Produced only by the threat stage, never by the COCO object model.
+    DANGEROUS_PERSON = "dangerous_person"
 
 
-# YOLO class-id → DetectionType mapping (COCO dataset classes)
+# YOLO class-id → DetectionType mapping (COCO dataset classes).
+#
+# COCO ONLY. The threat model is a separate two-class checkpoint whose
+# class 1 means "dangerous person", not "bicycle" -- routing its output
+# through this map would render every threat as a green ANIMAL box. It
+# has its own mapping in src/detection/threat.py.
 _YOLO_CLASS_MAP: dict[int, DetectionType] = {
     0: DetectionType.HUMAN,     # person
     1: DetectionType.ANIMAL,    # bicycle (treat as unknown via fallback)
@@ -95,6 +102,7 @@ class DetectionService:
         self.object_model = None      # YOLOv8n YOLO instance
         self.face_cascade = None      # cv2.CascadeClassifier
         self.face_recognizer = None   # FaceRecognitionService (set via attach_face_recognizer)
+        self.threat_classifier = None  # ThreatClassifier (set via attach_threat_classifier)
         self.previous_frame = None    # for frame differencing
         self.backend = "none"         # "hailo" | "cpu" | "none"
         self._initialized = False
@@ -339,6 +347,63 @@ class DetectionService:
         self.face_recognizer = recognizer
         logger.info("FaceRecognitionService attached to DetectionService")
 
+    def attach_threat_classifier(self, classifier) -> None:
+        """
+        Attach a ThreatClassifier for the dangerous-person cascade stage.
+
+        Args:
+            classifier: ThreatClassifier instance.
+        """
+        self.threat_classifier = classifier
+        logger.info("ThreatClassifier attached to DetectionService")
+
+    def classify_threats(
+        self,
+        frame: np.ndarray,
+        humans: List[Detection],
+    ) -> List[Detection]:
+        """
+        Ask the threat model about each person the object model found.
+
+        Only people are classified, so cost scales with the number of
+        humans in frame rather than with frame rate.
+
+        Args:
+            frame: Current frame as numpy array (BGR).
+            humans: HUMAN detections from detect_objects().
+
+        Returns:
+            One DANGEROUS_PERSON detection per person flagged as dangerous,
+            reusing that person's bbox. Empty if none were flagged.
+        """
+        detections: List[Detection] = []
+
+        if self.threat_classifier is None:
+            return detections
+
+        for person in humans:
+            try:
+                result = self.threat_classifier.classify_region(frame, person.bbox)
+            except Exception as exc:
+                # A threat-stage failure must not take down object detection
+                # or face recognition -- those carry the demo on their own.
+                logger.warning("Threat classification failed: %s", exc)
+                continue
+
+            if result is None or not result.is_dangerous:
+                continue
+
+            detections.append(
+                Detection(
+                    type=DetectionType.DANGEROUS_PERSON,
+                    confidence=result.confidence,
+                    bbox=person.bbox,
+                    label="dangerous",
+                )
+            )
+
+        return detections
+
     def process_frame(self, frame: np.ndarray) -> List[Detection]:
         """
         Full detection pipeline for a single frame.
@@ -373,6 +438,12 @@ class DetectionService:
             if humans or self.object_model is None:
                 faces = self.recognize_faces(frame)
                 all_detections.extend(faces)
+
+            # Threat classification runs per person, so it is gated on an
+            # actual human box. Unlike faces there is no motion-only
+            # fallback: without a person crop there is nothing to classify.
+            if humans:
+                all_detections.extend(self.classify_threats(frame, humans))
 
         return all_detections
 
@@ -415,6 +486,7 @@ class DetectionService:
             "motion_detection": self._initialized,
             "object_detection": self.object_model is not None,
             "face_recognition": self.face_recognizer is not None,
+            "threat_detection": self.threat_classifier is not None,
             "known_faces": known_faces,
         }
 
@@ -423,6 +495,7 @@ class DetectionService:
         self.object_model = None
         self.face_cascade = None
         self.face_recognizer = None
+        self.threat_classifier = None
         self.previous_frame = None
         self.backend = "none"
         self._initialized = False

@@ -52,8 +52,12 @@ media/
 logs/
 *.log
 
-# Models (too large for git)
-models/
+# Models (too large for git).
+# Weights are fetched, not committed: scripts/fetch_models.py downloads
+# them from the upstream release and verifies their published checksums.
+# The directory itself is kept so the fetch has somewhere to land.
+models/*
+!models/.gitkeep
 *.tflite
 *.h5
 *.pb

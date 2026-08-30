@@ -41,6 +41,17 @@ class Settings:
     # for a live demo. See FaceRecognitionService.similarity_threshold.
     FACE_SIMILARITY_THRESHOLD: float = 0.4
 
+    # Threat detection (dangerous-person cascade stage).
+    # Disabling this returns the pipeline to pure COCO detection + faces,
+    # with no code change -- the demo's escape hatch if the stage misbehaves.
+    THREAT_ENABLED: bool = True
+    THREAT_MODEL_PATH: Path = BASE_DIR / "models" / "threat-yolo11n.pt"
+    # Confidence 0.35 is the upstream model card's demonstration value.
+    THREAT_CONFIDENCE: float = 0.35
+    # Trained at 832, but that costs ~110ms/frame on x86 and materially more
+    # on a Pi 5 CPU. 416 roughly halves it. Raise on the Orin Nano.
+    THREAT_IMGSZ: int = 416
+
     # Storage
     DATA_DIR: Path = DATA_DIR
     MEDIA_DIR: Path = MEDIA_DIR
@@ -84,6 +95,13 @@ class Settings:
             DETECTION_THRESHOLD=float(os.getenv("DETECTION_THRESHOLD", 0.5)),
             FACE_RECOGNITION_THRESHOLD=float(os.getenv("FACE_RECOGNITION_THRESHOLD", 0.6)),
             FACE_SIMILARITY_THRESHOLD=float(os.getenv("FACE_SIMILARITY_THRESHOLD", 0.4)),
+            # Threat detection
+            THREAT_ENABLED=os.getenv("THREAT_ENABLED", "true").lower() == "true",
+            THREAT_MODEL_PATH=Path(
+                os.getenv("THREAT_MODEL_PATH", BASE_DIR / "models" / "threat-yolo11n.pt")
+            ),
+            THREAT_CONFIDENCE=float(os.getenv("THREAT_CONFIDENCE", 0.35)),
+            THREAT_IMGSZ=int(os.getenv("THREAT_IMGSZ", 416)),
             # Federated Learning
             FL_ENABLED=os.getenv("FL_ENABLED", "false").lower() == "true",
             FL_SERVER_URL=os.getenv("FL_SERVER_URL", "localhost:8080"),

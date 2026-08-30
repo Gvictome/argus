@@ -132,7 +132,16 @@ argus/
 
 ---
 
-MIT License - Senior Design Project 2026
+## License
+
+**AGPL-3.0** — see [`LICENSE`](LICENSE).
+
+ARGUS links Ultralytics and ships a third-party threat-detection model,
+both AGPL-3.0. AGPL's network clause reaches ARGUS because it serves video
+over a network. Third-party models, datasets, and their terms are recorded
+in [`NOTICE.md`](NOTICE.md).
+
+Senior Design Project 2026.
 
 ---
 

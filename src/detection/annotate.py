@@ -17,6 +17,7 @@ from src.detection import Detection, DetectionType
 # BGR, matching OpenCV's channel order.
 BOX_KNOWN = (0, 255, 0)     # green: recognized person
 BOX_UNKNOWN = (0, 0, 255)   # red: a face with no identity match
+BOX_THREAT = (0, 165, 255)  # orange: person flagged as carrying a weapon
 
 # Motion boxes cover most of the frame and would bury the useful ones.
 _SKIP_TYPES = frozenset({DetectionType.MOTION})
@@ -46,7 +47,16 @@ def build_label(detection: Detection) -> str:
 
 
 def box_color(detection: Detection) -> tuple:
-    """Green for anything identified or expected, red for unidentified faces."""
+    """
+    Orange for a flagged threat, red for an unidentified face, green
+    otherwise.
+
+    Threat is checked first: it is the most consequential thing on the
+    frame, and without its own color it would draw green and read as an
+    ordinary person.
+    """
+    if detection.type is DetectionType.DANGEROUS_PERSON:
+        return BOX_THREAT
     if detection.type is DetectionType.FACE and detection.face_id is None:
         return BOX_UNKNOWN
     return BOX_KNOWN
@@ -67,8 +77,23 @@ def draw_detections(frame: np.ndarray, detections: Iterable[Detection]) -> np.nd
     annotated = frame.copy()
     height, width = annotated.shape[:2]
 
+    detections = list(detections)
+
+    # A flagged person yields two detections sharing one bbox: the HUMAN
+    # box from the object model and the DANGEROUS_PERSON box from the
+    # threat stage. Drawing both stacks two labels on the same pixel and
+    # renders as unreadable overlapping text -- and implies two subjects
+    # where there is one. The threat box supersedes; the detection list
+    # itself is untouched, so events and the API still see both.
+    threat_boxes = {
+        d.bbox for d in detections if d.type is DetectionType.DANGEROUS_PERSON
+    }
+
     for det in detections:
         if det.type in _SKIP_TYPES:
+            continue
+
+        if det.type is DetectionType.HUMAN and det.bbox in threat_boxes:
             continue
 
         x, y, w, h = (int(v) for v in det.bbox)
