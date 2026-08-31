@@ -139,6 +139,29 @@ def create_app() -> FastAPI:
         else:
             logger.info("Threat detection disabled via THREAT_ENABLED")
 
+        # Event-triggered recording. Cameras run 24/7; footage is kept
+        # only around detections.
+        app.state.event_recorder = None
+        if settings.RECORD_EVENTS:
+            try:
+                from src.detection.event_recorder import EventRecorder, RecorderConfig
+                app.state.event_recorder = EventRecorder(
+                    RecorderConfig(
+                        pre_roll_s=settings.RECORD_PRE_ROLL_S,
+                        post_roll_s=settings.RECORD_POST_ROLL_S,
+                        max_clip_s=settings.RECORD_MAX_CLIP_S,
+                    ),
+                    camera_name="primary",
+                )
+                logger.info(
+                    "Event recording on — %.0fs pre-roll, %.0fs post-roll",
+                    settings.RECORD_PRE_ROLL_S, settings.RECORD_POST_ROLL_S,
+                )
+            except Exception as exc:
+                logger.warning("Event recording unavailable: %s", exc)
+        else:
+            logger.info("Event recording disabled via RECORD_EVENTS")
+
         # Start Federated Learning scheduler if enabled
         if settings.FL_ENABLED:
             model_manager = ModelManager()
@@ -154,6 +177,11 @@ def create_app() -> FastAPI:
         # Shut down detection service
         if hasattr(app.state, "detection_service"):
             app.state.detection_service.shutdown()
+
+        # Finalize any clip in progress, or it is left truncated.
+        recorder = getattr(app.state, "event_recorder", None)
+        if recorder is not None:
+            recorder.close()
 
         # Release every camera. A CSI sensor left open blocks the next
         # process from acquiring it, which turns one crash into a reboot.

@@ -136,7 +136,7 @@ async def camera_snapshot():
 
 
 @router.get("/api/camera/stream", tags=["Camera"], dependencies=_PROTECTED)
-async def camera_stream(detect_every: int = 3, quality: int = 80):
+async def camera_stream(request: Request, detect_every: int = 3, quality: int = 80):
     """
     Live MJPEG video stream with detection overlays burned in.
 
@@ -159,6 +159,7 @@ async def camera_stream(detect_every: int = 3, quality: int = 80):
             detection_service,
             detect_every=detect_every,
             jpeg_quality=quality,
+            recorder=getattr(request.app.state, "event_recorder", None),
         ),
         media_type="multipart/x-mixed-replace; boundary=frame"
     )
@@ -269,7 +270,7 @@ async def camera_snapshot_by_name(name: str):
 
 
 @router.get("/api/cameras/{name}/stream", tags=["Camera"], dependencies=_PROTECTED)
-async def camera_stream_by_name(name: str, detect_every: int = 3, quality: int = 80):
+async def camera_stream_by_name(request: Request, name: str, detect_every: int = 3, quality: int = 80):
     """
     Annotated MJPEG for one named camera.
 
@@ -288,7 +289,8 @@ async def camera_stream_by_name(name: str, detect_every: int = 3, quality: int =
 
     return StreamingResponse(
         stream_annotated_mjpeg(cam, detection_service,
-                               detect_every=detect_every, jpeg_quality=quality),
+                               detect_every=detect_every, jpeg_quality=quality,
+                               recorder=getattr(request.app.state, "event_recorder", None)),
         media_type="multipart/x-mixed-replace; boundary=frame",
     )
 
@@ -302,6 +304,30 @@ async def shutdown_camera(name: str):
 # ============================================================================
 # Federated Learning
 # ============================================================================
+
+@router.get("/api/recordings", tags=["Camera"], dependencies=_PROTECTED)
+async def list_recordings(request: Request, limit: int = 20):
+    """
+    Event clips saved so far.
+
+    Cameras run continuously; footage is written only around detections,
+    so this is the list of things that actually happened rather than a
+    directory of hours nobody will watch.
+    """
+    recorder = getattr(request.app.state, "event_recorder", None)
+    if recorder is None:
+        from src.config import settings
+        return {
+            "enabled": settings.RECORD_EVENTS,
+            "clips": [],
+            "detail": "Event recording is not active",
+        }
+    return {
+        "enabled": True,
+        "status": recorder.status(),
+        "clips": recorder.recent_clips(limit),
+    }
+
 
 @router.get("/api/federated/status", tags=["Federated"])
 async def federated_status(request: Request):

@@ -71,6 +71,19 @@ class Settings:
     # on a Pi 5 CPU. 416 roughly halves it. Raise on the Orin Nano.
     THREAT_IMGSZ: int = 416
 
+    # Event-triggered recording. Cameras run 24/7; disk does not.
+    # Continuous recording fills a demo unit's card in hours and buries
+    # the ten seconds anyone wants to see.
+    RECORD_EVENTS: bool = True
+    # Seconds of footage kept from *before* the trigger. A clip that
+    # starts at the detection has already missed the approach.
+    RECORD_PRE_ROLL_S: float = 5.0
+    # Seconds to keep recording after the last detection, so someone
+    # walking out of frame does not truncate the clip.
+    RECORD_POST_ROLL_S: float = 10.0
+    # Hard stop, so a stuck trigger cannot record until the disk fills.
+    RECORD_MAX_CLIP_S: float = 120.0
+
     # Storage
     DATA_DIR: Path = DATA_DIR
     MEDIA_DIR: Path = MEDIA_DIR
@@ -157,6 +170,11 @@ class Settings:
             # Cameras: "sensor_id:name" comma-separated. The Orin has two
             # CSI connectors, so the demo host runs "0:front,1:back".
             CAMERA_SENSORS=os.getenv("CAMERA_SENSORS", ""),
+            # Event recording
+            RECORD_EVENTS=os.getenv("RECORD_EVENTS", "true").lower() == "true",
+            RECORD_PRE_ROLL_S=float(os.getenv("RECORD_PRE_ROLL_S", 5.0)),
+            RECORD_POST_ROLL_S=float(os.getenv("RECORD_POST_ROLL_S", 10.0)),
+            RECORD_MAX_CLIP_S=float(os.getenv("RECORD_MAX_CLIP_S", 120.0)),
         )
 
 

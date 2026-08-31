@@ -26,6 +26,7 @@ def stream_annotated_mjpeg(
     detector,
     detect_every: int = 3,
     jpeg_quality: int = 80,
+    recorder=None,
 ) -> Generator[bytes, None, None]:
     """
     Yield multipart MJPEG parts with detection overlays burned in.
@@ -39,6 +40,10 @@ def stream_annotated_mjpeg(
             collapses the frame rate. Boxes persist between runs so they do
             not flicker.
         jpeg_quality: 0-100, passed to the JPEG encoder.
+        recorder: Optional EventRecorder. Fed the *clean* frame, not the
+            annotated one -- saved footage should be evidence, not a
+            screenshot of our own overlay, and boxes burned into an
+            archive cannot be removed later.
 
     Yields:
         Complete multipart parts, ready for StreamingResponse.
@@ -66,6 +71,14 @@ def stream_annotated_mjpeg(
                 logger.warning("Detection failed on frame %d: %s", frame_index, exc)
                 detections = []
         frame_index += 1
+
+        if recorder is not None:
+            try:
+                recorder.process(frame, detections)
+            except Exception as exc:
+                # Recording is secondary to the live view. A full disk
+                # must not take the demo's video feed down with it.
+                logger.warning("Event recording failed on frame %d: %s", frame_index, exc)
 
         annotated = draw_detections(frame, detections)
 
