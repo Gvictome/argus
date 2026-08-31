@@ -10,7 +10,7 @@
 | USB-C PD Power Supply 27W | 492-2 | 1 | Power delivery |
 | Raspberry Pi Active Cooler | 374-1 | 1 | Thermal management |
 | MicroSD Card 32GB | 1350-1 | 1 | OS and storage |
-| AI Hat+ 2 | - | 1 | Neural accelerator (optional) |
+| AI HAT+ 2 (Hailo-10H, 40 TOPS) | - | 1 | Neural accelerator |
 
 ## Component Details
 
@@ -67,7 +67,7 @@ libcamera-still -o test.jpg
 | Raspberry Pi 5 | 3-5W idle, 8-12W load |
 | Camera Module 3 | ~0.5W |
 | Active Cooler | ~0.5W |
-| AI Hat+ 2 | 2-4W (if installed) |
+| AI HAT+ 2 | ~3W peak |
 | **Total** | ~15W max |
 
 27W supply provides ample headroom.
@@ -128,23 +128,46 @@ sudo systemctl start ssh
 - Enables real-time object detection
 
 **Specifications:**
-- Hailo-8L accelerator (13 TOPS)
-- PCIe interface to Pi 5
-- Supported by TensorFlow Lite, OpenCV DNN
+
+The AI HAT+ 2 is a *different chip* from the AI HAT+, not a faster
+revision of it. A model compiled for one will not load on the other, so
+get this right before compiling anything.
+
+| Board | Accelerator | Performance | Memory |
+|-------|-------------|-------------|--------|
+| AI Kit / AI HAT+ 13 TOPS | Hailo-8L | 13 TOPS | uses Pi RAM |
+| AI HAT+ 26 TOPS | Hailo-8 | 26 TOPS | uses Pi RAM |
+| **AI HAT+ 2** | **Hailo-10H** | **40 TOPS INT8** (26 TOPS INT4 vision) | **8 GB onboard LPDDR4X** |
+
+AI HAT+ 2 released 2026-01-15, ~3 W peak. Its own 8 GB is the reason it
+can run LLMs and VLMs, where the Hailo-8 boards are vision-only.
+
+PCIe interface to the Pi 5. Runs via HailoRT — **not** TensorFlow Lite or
+OpenCV DNN, which an earlier draft of this document claimed.
 
 **Installation:**
 1. Power off Pi 5
-2. Attach Hat+ 2 to GPIO header
+2. Attach the HAT to the GPIO header and the PCIe ribbon
 3. Secure with standoffs
-4. Boot and install drivers
+4. Boot and install the runtime for *your* board:
 
 ```bash
-# Install Hailo runtime (example)
-sudo apt install hailo-driver hailo-runtime
+# Hailo-8 / 8L  (AI Kit, AI HAT+)
+sudo apt install hailo-all
 
-# Verify detection
-hailortcli scan
+# Hailo-10H     (AI HAT+ 2)
+sudo apt install hailo-h10-all
+
+sudo reboot
+
+# Confirm the board is seen
+hailortcli fw-control identify
 ```
+
+**Models are compiled elsewhere.** The Hailo Dataflow Compiler is x86_64
+Linux only — you cannot compile on the Pi. Build on a workstation with
+`scripts/export_hailo.py`, then copy the export *directory* over. See
+[`HAILO_PIPELINE.md`](HAILO_PIPELINE.md).
 
 ## Assembly Order
 

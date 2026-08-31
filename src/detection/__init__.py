@@ -64,6 +64,34 @@ _YOLO_CLASS_MAP: dict[int, DetectionType] = {
 }
 
 
+# Where a compiled Hailo model may live, in preference order.
+#
+# Ultralytics loads the export *directory* -- `YOLO("yolo11n_hailo_model")`
+# -- because the HEF alone is not enough: the directory also carries the
+# metadata describing input size, classes, and NMS. An earlier version of
+# this probe looked only for a bare `yolov8n_hailo_model.hef` file, which
+# is not what `format="hailo"` produces, so the accelerator would never
+# have been found on a correctly-exported install.
+#
+# The bare .hef is still accepted last, so an existing hand-placed file
+# keeps working.
+_HAILO_CANDIDATES = (
+    ("models", "yolov8n_hailo_model"),
+    ("models", "yolo11n_hailo_model"),
+    ("yolov8n_hailo_model",),
+    ("yolov8n_hailo_model.hef",),
+)
+
+
+def _find_hailo_model():
+    """The first Hailo export present, or None."""
+    for parts in _HAILO_CANDIDATES:
+        candidate = BASE_DIR.joinpath(*parts)
+        if candidate.exists():
+            return candidate
+    return None
+
+
 @dataclass
 class Detection:
     """Detection result"""
@@ -126,14 +154,15 @@ class DetectionService:
                 # this machine, and a TensorRT engine is not portable
                 # between devices or JetPack versions anyway.
                 tensorrt_model = BASE_DIR / "models" / "yolov8n.engine"
-                hailo_model = BASE_DIR / "yolov8n_hailo_model.hef"
+                hailo_model = _find_hailo_model()
 
                 if tensorrt_model.exists():
                     logger.info("TensorRT engine found — using Jetson GPU acceleration.")
                     self.object_model = _YOLO(str(tensorrt_model))
                     self.backend = "tensorrt"
-                elif hailo_model.exists():
-                    logger.info("Optimized Hailo model found! Using AI HAT+ acceleration.")
+                elif hailo_model is not None:
+                    logger.info("Hailo model found at %s — using AI HAT+ acceleration.",
+                                hailo_model)
                     self.object_model = _YOLO(str(hailo_model))
                     self.backend = "hailo"
                 else:

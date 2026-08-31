@@ -214,6 +214,61 @@ class TestRegistryFromSettings:
         assert build_registry_from_settings(s).names() == ["front", "back"]
 
 
+class TestHailoProbe:
+    """
+    Regression: the probe looked only for a bare `yolov8n_hailo_model.hef`
+    file. Ultralytics' `format="hailo"` produces an export DIRECTORY --
+    the HEF alone lacks the metadata for input size, classes, and NMS --
+    so on a correctly-exported install the accelerator was never found and
+    the Pi silently ran on CPU.
+    """
+
+    def test_export_directory_is_found(self, tmp_path, monkeypatch):
+        import src.detection as detection_module
+
+        (tmp_path / "models" / "yolov8n_hailo_model").mkdir(parents=True)
+        monkeypatch.setattr(detection_module, "BASE_DIR", tmp_path)
+
+        found = detection_module._find_hailo_model()
+
+        assert found is not None
+        assert found.name == "yolov8n_hailo_model"
+
+    def test_yolo11_export_directory_is_found(self, tmp_path, monkeypatch):
+        import src.detection as detection_module
+
+        (tmp_path / "models" / "yolo11n_hailo_model").mkdir(parents=True)
+        monkeypatch.setattr(detection_module, "BASE_DIR", tmp_path)
+
+        assert detection_module._find_hailo_model() is not None
+
+    def test_bare_hef_file_still_works(self, tmp_path, monkeypatch):
+        """A hand-placed .hef from before this change must keep working."""
+        import src.detection as detection_module
+
+        (tmp_path / "yolov8n_hailo_model.hef").write_bytes(b"stub")
+        monkeypatch.setattr(detection_module, "BASE_DIR", tmp_path)
+
+        assert detection_module._find_hailo_model() is not None
+
+    def test_nothing_present_returns_none(self, tmp_path, monkeypatch):
+        import src.detection as detection_module
+
+        monkeypatch.setattr(detection_module, "BASE_DIR", tmp_path)
+
+        assert detection_module._find_hailo_model() is None
+
+    def test_directory_wins_over_bare_hef(self, tmp_path, monkeypatch):
+        """The directory is the complete export; prefer it."""
+        import src.detection as detection_module
+
+        (tmp_path / "models" / "yolov8n_hailo_model").mkdir(parents=True)
+        (tmp_path / "yolov8n_hailo_model.hef").write_bytes(b"stub")
+        monkeypatch.setattr(detection_module, "BASE_DIR", tmp_path)
+
+        assert detection_module._find_hailo_model().is_dir()
+
+
 class TestCameraState:
     def test_reports_stopped_before_initialize(self):
         assert CameraService().get_status()["status"] == "stopped"

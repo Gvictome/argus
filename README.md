@@ -14,7 +14,7 @@ ARGUS is a senior design project that creates an intelligent home security syste
 | Component | Model | Description |
 |-----------|-------|-------------|
 | SBC | Raspberry Pi 5 (8GB) | Main compute unit |
-| AI Accelerator | Raspberry Pi AI HAT+ (Hailo-8L, 26 TOPS) | Neural network accelerator |
+| AI Accelerator | Raspberry Pi AI HAT+ 2 (Hailo-10H, 40 TOPS INT8, 8GB) | Neural network accelerator |
 | Camera | Raspberry Pi Camera Module 3 (12MP) | Primary vision input |
 | Enclosure | HighPi Pro 5S Case | Enclosure with ventilation |
 | Power | USB-C PD Power Supply | 27W power delivery |
