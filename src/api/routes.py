@@ -197,6 +197,133 @@ async def camera_shutdown():
 
 
 # ============================================================================
+# Cameras (multi-sensor)
+# ============================================================================
+#
+# The single-camera endpoints above act on the primary sensor and are
+# unchanged. These address a specific camera by name, which is what the
+# Orin's two CSI connectors need.
+
+def _registry():
+    import src.camera as camera_module
+    return camera_module.camera_registry
+
+
+def _require_camera(name: str):
+    cam = _registry().get(name)
+    if cam is None:
+        known = _registry().names()
+        raise HTTPException(
+            status_code=404,
+            detail=f"No camera {name!r}. Configured: {known or 'none'}",
+        )
+    return cam
+
+
+@router.get("/api/cameras", tags=["Camera"])
+async def list_cameras():
+    """Every configured camera, and what board we are on."""
+    return _registry().status()
+
+
+@router.post("/api/cameras/init", tags=["Camera"], dependencies=_PROTECTED)
+async def init_all_cameras():
+    """
+    Open every configured camera.
+
+    Reports per-camera success: with two sensors, "one failed" is the
+    interesting outcome and a single boolean would hide which.
+    """
+    results = _registry().initialize_all()
+    return {
+        "results": results,
+        "ok": all(results.values()) if results else False,
+        "cameras": _registry().status()["cameras"],
+    }
+
+
+@router.get("/api/cameras/{name}/status", tags=["Camera"])
+async def camera_status_by_name(name: str):
+    return _require_camera(name).get_status()
+
+
+@router.post("/api/cameras/{name}/init", tags=["Camera"], dependencies=_PROTECTED)
+async def init_camera(name: str):
+    cam = _require_camera(name)
+    if cam.initialize():
+        return {"message": f"Camera {name!r} initialized", "status": cam.get_status()}
+    raise HTTPException(status_code=503, detail=f"Camera {name!r} failed to initialize")
+
+
+@router.get("/api/cameras/{name}/snapshot", tags=["Camera"], dependencies=_PROTECTED)
+async def camera_snapshot_by_name(name: str):
+    from fastapi.responses import Response
+
+    cam = _require_camera(name)
+    if not cam.is_initialized:
+        raise HTTPException(status_code=503, detail=f"Camera {name!r} not initialized")
+    frame = cam.get_frame()
+    if frame is None:
+        raise HTTPException(status_code=500, detail="Failed to capture frame")
+    return Response(content=frame, media_type="image/jpeg")
+
+
+@router.get("/api/cameras/{name}/stream", tags=["Camera"], dependencies=_PROTECTED)
+async def camera_stream_by_name(name: str, detect_every: int = 3, quality: int = 80):
+    """
+    Annotated MJPEG for one named camera.
+
+    All cameras share the one DetectionService, so its motion history and
+    FPS window are shared too. That is correct for the demo -- one
+    pipeline, several views -- but it does mean two simultaneous streams
+    interleave their motion state. Run one at a time for a clean reading.
+    """
+    from fastapi.responses import StreamingResponse
+    from src.detection import detection_service
+    from src.detection.stream import stream_annotated_mjpeg
+
+    cam = _require_camera(name)
+    if not cam.is_initialized:
+        raise HTTPException(status_code=503, detail=f"Camera {name!r} not initialized")
+
+    return StreamingResponse(
+        stream_annotated_mjpeg(cam, detection_service,
+                               detect_every=detect_every, jpeg_quality=quality),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+    )
+
+
+@router.post("/api/cameras/{name}/shutdown", tags=["Camera"], dependencies=_PROTECTED)
+async def shutdown_camera(name: str):
+    _require_camera(name).shutdown()
+    return {"message": f"Camera {name!r} shut down"}
+
+
+# ============================================================================
+# Federated Learning
+# ============================================================================
+
+@router.get("/api/federated/status", tags=["Federated"])
+async def federated_status(request: Request):
+    """
+    FL schedule state: when the last round ran and when the next is due.
+
+    Backs the poster claim that rounds happen on a cadence. Without a
+    visible next-due time, "it runs every two weeks" is unfalsifiable.
+    """
+    scheduler = getattr(request.app.state, "fl_scheduler", None)
+    if scheduler is None:
+        from src.config import settings
+        return {
+            "enabled": settings.FL_ENABLED,
+            "running": False,
+            "interval_days": settings.FL_ROUND_INTERVAL_DAYS,
+            "detail": "Scheduler not started (FL_ENABLED is false)",
+        }
+    return scheduler.status()
+
+
+# ============================================================================
 # Detection
 # ============================================================================
 

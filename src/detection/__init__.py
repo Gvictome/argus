@@ -120,17 +120,27 @@ class DetectionService:
         # Object detection — YOLOv8.1 (8.4.x)
         if _ULTRALYTICS_AVAILABLE:
             try:
-                # Check for Hailo optimized model first
+                # Accelerators first, in descending order of speed, then
+                # plain CPU. Each is a file probe rather than a hardware
+                # query: an engine only exists if someone exported it for
+                # this machine, and a TensorRT engine is not portable
+                # between devices or JetPack versions anyway.
+                tensorrt_model = BASE_DIR / "models" / "yolov8n.engine"
                 hailo_model = BASE_DIR / "yolov8n_hailo_model.hef"
-                if hailo_model.exists():
+
+                if tensorrt_model.exists():
+                    logger.info("TensorRT engine found — using Jetson GPU acceleration.")
+                    self.object_model = _YOLO(str(tensorrt_model))
+                    self.backend = "tensorrt"
+                elif hailo_model.exists():
                     logger.info("Optimized Hailo model found! Using AI HAT+ acceleration.")
                     self.object_model = _YOLO(str(hailo_model))
                     self.backend = "hailo"
                 else:
-                    logger.info("No Hailo model found. Using standard YOLOv8n (CPU).")
+                    logger.info("No accelerator model found. Using standard YOLOv8n (CPU).")
                     self.object_model = _YOLO("yolov8n.pt")
                     self.backend = "cpu"
-                
+
                 logger.info("YOLO model loaded successfully")
             except Exception as exc:
                 # Loud on purpose. A silent fallback here disables object

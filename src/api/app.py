@@ -76,6 +76,20 @@ def create_app() -> FastAPI:
         from src.api.auth import initialize_auth
         initialize_auth(db)
 
+        # Cameras. The registry holds every configured sensor; on the
+        # Orin that is both CSI connectors. Devices are not opened here --
+        # startup must not block on hardware, and a camera that is absent
+        # should not stop the API from serving.
+        import src.camera as camera_module
+        from src.camera import build_registry_from_settings
+        camera_module.camera_registry = build_registry_from_settings(settings)
+        app.state.camera_registry = camera_module.camera_registry
+        logger.info(
+            "Camera registry: %s on %s",
+            camera_module.camera_registry.names() or "none configured",
+            camera_module.BOARD.value,
+        )
+
         # Initialize detection service (motion -> YOLO -> faces -> threat)
         from src.detection import detection_service, DetectionConfig
         # Without this the env vars in Settings never reach the pipeline:
@@ -140,6 +154,11 @@ def create_app() -> FastAPI:
         # Shut down detection service
         if hasattr(app.state, "detection_service"):
             app.state.detection_service.shutdown()
+
+        # Release every camera. A CSI sensor left open blocks the next
+        # process from acquiring it, which turns one crash into a reboot.
+        if hasattr(app.state, "camera_registry"):
+            app.state.camera_registry.shutdown_all()
 
         # Close database
         if hasattr(app.state, "db"):

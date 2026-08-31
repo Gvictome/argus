@@ -26,6 +26,11 @@ class Settings:
 
     # Camera
     CAMERA_INDEX: int = 0
+    # Which cameras to open: comma-separated "sensor_id:name", or bare
+    # ids. Empty falls back to CAMERA_INDEX, i.e. one camera.
+    #   Jetson Orin (two CSI connectors):  "0:front,1:back"
+    #   single camera:                     "0"
+    CAMERA_SENSORS: str = ""
     CAMERA_RESOLUTION: tuple = (1920, 1080)
     CAMERA_FPS: int = 30
     CAMERA_ROTATION: int = 0
@@ -96,8 +101,15 @@ class Settings:
     FL_SERVER_URL: str = "localhost:8080"
     FL_LOCAL_EPOCHS: int = 5
     FL_MIN_SAMPLES: int = 50
-    FL_ROUND_HOUR: int = 2  # 2 AM
+    FL_ROUND_HOUR: int = 2  # 2 AM — the idle window
+    # Days between FL rounds. Two weeks: enough footage accumulates
+    # between rounds to be worth aggregating, and it keeps training off
+    # the demo unit during showcase season.
+    FL_ROUND_INTERVAL_DAYS: int = 14
     FL_TRAINING_DIR: Optional[Path] = None  # set in __post_init__
+    # Persisted last-round timestamp. Without this the interval restarts
+    # on every reboot and a regularly-restarted host never runs a round.
+    FL_STATE_PATH: Optional[Path] = None    # set in __post_init__
 
     def __post_init__(self):
         """Create directories if they don't exist"""
@@ -108,6 +120,9 @@ class Settings:
         if self.FL_TRAINING_DIR is None:
             self.FL_TRAINING_DIR = self.DATA_DIR / "training"
         self.FL_TRAINING_DIR.mkdir(parents=True, exist_ok=True)
+
+        if self.FL_STATE_PATH is None:
+            self.FL_STATE_PATH = self.DATA_DIR / "fl_state.json"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -138,6 +153,10 @@ class Settings:
             FL_LOCAL_EPOCHS=int(os.getenv("FL_LOCAL_EPOCHS", 5)),
             FL_MIN_SAMPLES=int(os.getenv("FL_MIN_SAMPLES", 50)),
             FL_ROUND_HOUR=int(os.getenv("FL_ROUND_HOUR", 2)),
+            FL_ROUND_INTERVAL_DAYS=int(os.getenv("FL_ROUND_INTERVAL_DAYS", 14)),
+            # Cameras: "sensor_id:name" comma-separated. The Orin has two
+            # CSI connectors, so the demo host runs "0:front,1:back".
+            CAMERA_SENSORS=os.getenv("CAMERA_SENSORS", ""),
         )
 
 
