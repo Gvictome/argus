@@ -16,18 +16,24 @@ off with one environment variable.
 | Motion | Frame differencing | Every frame |
 | Objects | YOLOv8n, 80 COCO classes | Motion found |
 | Faces | ArcFace / `buffalo_l` | A human was found |
-| **Threat** | **YOLO11n, 2 classes** | **A human was found** |
+| **Threat** | **YOLO11n, 2 classes** | **Motion found** |
 
 ```
 motion (frame diff)
-  └─ yolov8n COCO  →  MOTION / HUMAN / ANIMAL / VEHICLE
-       └─ if HUMAN:
-            ├─ ArcFace identity
-            └─ YOLO11n threat, on each person crop
+  ├─ yolov8n COCO  →  MOTION / HUMAN / ANIMAL / VEHICLE
+  │    └─ if HUMAN: ArcFace identity
+  └─ YOLO11n threat  →  DANGEROUS_PERSON   (whole frame, own boxes)
 ```
 
-Threat classification runs **per person**, not per frame, so its cost
-scales with how many people are present rather than with frame rate.
+One whole-frame inference, **not** one per person, and deliberately not
+gated behind a COCO human box. The threat model is itself a two-class
+person detector, so it locates and classifies in a single pass.
+
+Gating it on a COCO detection cost 20% of true positives outright --
+recall 0.612 against 0.800 -- because the object model never found those
+people at all. Full numbers in
+[`DETECTION_ACCURACY.md`](DETECTION_ACCURACY.md).
+
 Implementation is `src/detection/threat.py`; it is wired into
 `DetectionService` at startup by `src/api/app.py`.
 
@@ -67,7 +73,7 @@ and reports `"threat_detection": false`. Everything else runs normally.
 |----------|---------|---------|
 | `THREAT_ENABLED` | `true` | Master switch |
 | `THREAT_MODEL_PATH` | `models/threat-yolo11n.pt` | Weights |
-| `THREAT_CONFIDENCE` | `0.35` | Minimum detection confidence |
+| `THREAT_CONFIDENCE` | `0.55` | Tuned; see DETECTION_ACCURACY.md |
 | `THREAT_IMGSZ` | `416` | Inference input size |
 
 `THREAT_ENABLED=false` returns the pipeline to exactly its previous
@@ -113,13 +119,14 @@ handgun sample, for the person actually holding the gun:
 | +30% padding | dangerous, 0.533 |
 | +50% padding | dangerous, 0.436 |
 
-`CROP_PADDING = 0.15` in `src/detection/threat.py`. It also beats
-classifying the whole frame (0.436 at 416px), because the person fills
-more of the input.
+This is why the cascade does not crop. `classify_region()` remains for
+callers wanting a verdict on one specific person and pads by
+`CROP_PADDING = 0.15`; the cascade uses `detect_threats()`, which
+measured better on every axis. See `DETECTION_ACCURACY.md` section 3.
 
-The tradeoff: padding can pull a neighbour into the crop, so someone
-standing beside an armed person can inherit the flag. 15% keeps that
-narrow while still restoring the context the model needs.
+Padding has its own tradeoff, which is the other reason the cascade
+avoids it: a padded crop can pull a neighbour in, so someone standing
+beside an armed person can inherit the flag.
 
 ---
 
@@ -137,24 +144,27 @@ the most obvious person in frame.
 
 ## 6. Performance
 
-Measured on x86 (Ryzen AI 7 350), one person crop, YOLO11n:
+Measured on x86 (Ryzen AI 7 350), YOLO11n, whole frame:
 
-| `imgsz` | ms/person | Detection |
-|--------:|----------:|-----------|
-| 320 | 15.8 | **missed** |
-| **416** | **20.1** | **dangerous 0.699** |
-| 512 | 27.5 | dangerous 0.515 |
-| 640 | 32.4 | dangerous 0.596 |
-| 832 (trained) | 45.6 | dangerous 0.664 |
+| `imgsz` | ms/frame | Note |
+|--------:|---------:|------|
+| 320 | ~16 | **misses entirely, do not use** |
+| **416** | **~36** | default: fastest usable, and most confident |
+| 512 | ~28-45 | |
+| 832 (trained) | ~46+ | no accuracy gain here to justify it |
 
-416 is both the fastest usable size and the most confident, which is why
-it is the default. 320 misses entirely — do not go below 416.
+The cost is a **constant per frame** now, not per person, so a crowded
+booth no longer slows detection down.
 
-**A Pi 5 CPU is materially slower than this**, and the per-frame cost is
-this number times the number of people in frame. Two people at 416px is
-~40ms of threat work on top of YOLOv8n and ArcFace. Benchmark on the Pi
-before assuming the demo's frame rate survives; the Hailo export is the
-lever if it does not.
+**A Pi 5 CPU is materially slower than this.** Benchmark before assuming
+the demo's frame rate survives:
+
+```bash
+python scripts/benchmark_classes.py --images <folder of stills>
+```
+
+If it does not hold, in order: raise `detect_every` on the stream, drop
+`THREAT_IMGSZ` (never below 416), then export to Hailo.
 
 ---
 
@@ -208,10 +218,14 @@ the status field, and the overlay rules.
 weapon-like object in a single frame. It is not a claim about intent,
 guilt, or threat.
 
-Upstream recall is **0.69** — roughly a third of true instances are
-missed — and false positives occur on small, occluded, or poorly lit
-objects, including books, bottles, phones, and umbrellas. Those hard
-negatives are in the training data precisely because they are confusable.
+Measured on ARGUS at the shipped threshold, recall is **0.768** — about
+one armed person in four is missed — and roughly **19 of every 100
+ordinary scenes** flag someone who is not armed. False positives cluster
+on small, occluded, or poorly lit objects: books, bottles, phones,
+umbrellas. Those hard negatives are in the training data precisely
+because they are confusable.
+
+This is a review aid, not a guard. Say so before a judge asks.
 
 A detection should only mark a frame for human review. If a judge asks
 about accuracy, quote the recall; it is a more credible answer than a

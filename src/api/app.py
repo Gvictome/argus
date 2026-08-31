@@ -39,12 +39,17 @@ def create_app() -> FastAPI:
     )
 
     # CORS middleware for local network access
+    # allow_origins=["*"] with allow_credentials=True is rejected by every
+    # browser, and would be unsafe if it were not. The dashboard is served
+    # from this same origin, so it needs no CORS grant at all; CORS_ORIGINS
+    # exists for a separately-hosted frontend (the Next.js dashboard).
+    origins = [o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],  # Restrict in production
+        allow_origins=origins,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type"],
     )
 
     # Static files
@@ -65,6 +70,11 @@ def create_app() -> FastAPI:
         db = Database(settings.DB_PATH)
         db.initialize()
         app.state.db = db
+
+        # Authentication. Must come before anything serves a route, and
+        # it bootstraps the admin account on a fresh install.
+        from src.api.auth import initialize_auth
+        initialize_auth(db)
 
         # Initialize detection service (motion -> YOLO -> faces -> threat)
         from src.detection import detection_service, DetectionConfig

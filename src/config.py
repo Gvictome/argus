@@ -46,8 +46,22 @@ class Settings:
     # with no code change -- the demo's escape hatch if the stage misbehaves.
     THREAT_ENABLED: bool = True
     THREAT_MODEL_PATH: Path = BASE_DIR / "models" / "threat-yolo11n.pt"
-    # Confidence 0.35 is the upstream model card's demonstration value.
-    THREAT_CONFIDENCE: float = 0.35
+    # Tuned, not inherited. The upstream model card demonstrates at 0.35;
+    # swept against the 314-image labeled test set plus 128 ordinary COCO
+    # images as negatives (scripts/tune_threat_threshold.py):
+    #
+    #   thresh  precision  recall     F1   false alarms per 100 ordinary scenes
+    #     0.35      0.901   0.800  0.847   29.7
+    #     0.55      0.919   0.768  0.837   18.8
+    #     0.70      0.931   0.700  0.799   10.2
+    #
+    # F1 peaks near 0.30, but F1 is the wrong objective here. At 0.35
+    # nearly one ordinary scene in three flags someone as armed. Pointed
+    # at a booth visitor that is both a credibility problem and an
+    # ethical one. 0.55 gives up 0.03 recall to cut false alarms by 37%.
+    # Raise toward 0.70 for a crowded room; lower only if a missed
+    # detection genuinely costs more than a false accusation.
+    THREAT_CONFIDENCE: float = 0.55
     # Trained at 832, but that costs ~110ms/frame on x86 and materially more
     # on a Pi 5 CPU. 416 roughly halves it. Raise on the Orin Nano.
     THREAT_IMGSZ: int = 416
@@ -60,6 +74,19 @@ class Settings:
     # Security
     TOKEN_EXPIRY: int = 3600  # seconds
     MAX_LOGIN_ATTEMPTS: int = 5
+    # Require a bearer token on every endpoint that reads the camera or
+    # mutates state.
+    #
+    # Defaults to false so the existing LAN demo flow is unchanged. That
+    # is only defensible behind a router: with this off, anyone who can
+    # reach the port can watch the camera and delete enrolled faces.
+    # Anything that exposes ARGUS beyond the LAN must set this true --
+    # scripts/run_tunnel.sh refuses to start without it.
+    AUTH_REQUIRED: bool = False
+    # Comma-separated origins allowed to call the API cross-origin. Empty
+    # by default: the built-in dashboard is same-origin and needs none.
+    # Set this only for a separately-hosted frontend.
+    CORS_ORIGINS: str = ""
 
     # Automation
     AUTOMATION_ENABLED: bool = True
@@ -100,8 +127,11 @@ class Settings:
             THREAT_MODEL_PATH=Path(
                 os.getenv("THREAT_MODEL_PATH", BASE_DIR / "models" / "threat-yolo11n.pt")
             ),
-            THREAT_CONFIDENCE=float(os.getenv("THREAT_CONFIDENCE", 0.35)),
+            THREAT_CONFIDENCE=float(os.getenv("THREAT_CONFIDENCE", 0.55)),
             THREAT_IMGSZ=int(os.getenv("THREAT_IMGSZ", 416)),
+            # Security
+            AUTH_REQUIRED=os.getenv("AUTH_REQUIRED", "false").lower() == "true",
+            CORS_ORIGINS=os.getenv("CORS_ORIGINS", ""),
             # Federated Learning
             FL_ENABLED=os.getenv("FL_ENABLED", "false").lower() == "true",
             FL_SERVER_URL=os.getenv("FL_SERVER_URL", "localhost:8080"),

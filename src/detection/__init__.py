@@ -357,47 +357,45 @@ class DetectionService:
         self.threat_classifier = classifier
         logger.info("ThreatClassifier attached to DetectionService")
 
-    def classify_threats(
-        self,
-        frame: np.ndarray,
-        humans: List[Detection],
-    ) -> List[Detection]:
+    def detect_threats(self, frame: np.ndarray) -> List[Detection]:
         """
-        Ask the threat model about each person the object model found.
+        Find people carrying weapons, using the threat model's own boxes.
 
-        Only people are classified, so cost scales with the number of
-        humans in frame rather than with frame rate.
+        One inference over the whole frame. The threat model is itself a
+        person detector, so it locates and classifies in a single pass --
+        it does not need the COCO model to find people first.
+
+        Deliberately *not* gated on a COCO human detection. Measured over
+        the 314-image upstream test set, gating that way lost 20% of true
+        positives outright: the COCO model simply never found those
+        people, so the threat stage never ran on them. Recall went from
+        0.800 to 0.612.
 
         Args:
             frame: Current frame as numpy array (BGR).
-            humans: HUMAN detections from detect_objects().
 
         Returns:
-            One DANGEROUS_PERSON detection per person flagged as dangerous,
-            reusing that person's bbox. Empty if none were flagged.
+            One DANGEROUS_PERSON detection per flagged person.
         """
         detections: List[Detection] = []
 
         if self.threat_classifier is None:
             return detections
 
-        for person in humans:
-            try:
-                result = self.threat_classifier.classify_region(frame, person.bbox)
-            except Exception as exc:
-                # A threat-stage failure must not take down object detection
-                # or face recognition -- those carry the demo on their own.
-                logger.warning("Threat classification failed: %s", exc)
-                continue
+        try:
+            results = self.threat_classifier.detect_threats(frame)
+        except Exception as exc:
+            # A failure in the newest stage must not take down object
+            # detection or face recognition -- those carry the demo.
+            logger.warning("Threat detection failed: %s", exc)
+            return detections
 
-            if result is None or not result.is_dangerous:
-                continue
-
+        for r in results:
             detections.append(
                 Detection(
                     type=DetectionType.DANGEROUS_PERSON,
-                    confidence=result.confidence,
-                    bbox=person.bbox,
+                    confidence=r.confidence,
+                    bbox=r.bbox,
                     label="dangerous",
                 )
             )
@@ -439,11 +437,10 @@ class DetectionService:
                 faces = self.recognize_faces(frame)
                 all_detections.extend(faces)
 
-            # Threat classification runs per person, so it is gated on an
-            # actual human box. Unlike faces there is no motion-only
-            # fallback: without a person crop there is nothing to classify.
-            if humans:
-                all_detections.extend(self.classify_threats(frame, humans))
+            # Threat detection locates people itself, so it runs on motion
+            # alone rather than behind a COCO human box. Gating it on one
+            # cost 20% of true positives on the upstream test set.
+            all_detections.extend(self.detect_threats(frame))
 
         return all_detections
 

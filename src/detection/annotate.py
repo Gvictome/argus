@@ -27,6 +27,28 @@ _FONT_SCALE = 0.6
 _THICKNESS = 2
 
 
+# Overlap above which a threat box is taken to describe the same person as
+# a COCO human box. The two models frame a person slightly differently, so
+# 0.5 absorbs that disagreement without merging two people standing close.
+_SUPERSEDE_IOU = 0.5
+
+
+def _iou(a: tuple, b: tuple) -> float:
+    """Intersection over union of two (x, y, w, h) boxes."""
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+
+    ix1, iy1 = max(ax, bx), max(ay, by)
+    ix2, iy2 = min(ax + aw, bx + bw), min(ay + ah, by + bh)
+    iw, ih = ix2 - ix1, iy2 - iy1
+    if iw <= 0 or ih <= 0:
+        return 0.0
+
+    intersection = iw * ih
+    union = aw * ah + bw * bh - intersection
+    return intersection / union if union > 0 else 0.0
+
+
 def _is_known(detection: Detection) -> bool:
     """A face is identified only when the recognizer resolved a face_id."""
     return detection.type is DetectionType.FACE and detection.face_id is not None
@@ -79,21 +101,25 @@ def draw_detections(frame: np.ndarray, detections: Iterable[Detection]) -> np.nd
 
     detections = list(detections)
 
-    # A flagged person yields two detections sharing one bbox: the HUMAN
-    # box from the object model and the DANGEROUS_PERSON box from the
-    # threat stage. Drawing both stacks two labels on the same pixel and
-    # renders as unreadable overlapping text -- and implies two subjects
-    # where there is one. The threat box supersedes; the detection list
+    # A flagged person is detected twice: once as HUMAN by the COCO model
+    # and once as DANGEROUS_PERSON by the threat model. Drawing both
+    # stacks two labels on nearly the same pixels -- unreadable, and it
+    # implies two subjects where there is one. The threat box supersedes.
+    #
+    # Matched by overlap, not equality: the two boxes come from different
+    # models and agree closely but never exactly. The detection list
     # itself is untouched, so events and the API still see both.
-    threat_boxes = {
+    threat_boxes = [
         d.bbox for d in detections if d.type is DetectionType.DANGEROUS_PERSON
-    }
+    ]
 
     for det in detections:
         if det.type in _SKIP_TYPES:
             continue
 
-        if det.type is DetectionType.HUMAN and det.bbox in threat_boxes:
+        if det.type is DetectionType.HUMAN and any(
+            _iou(det.bbox, tb) >= _SUPERSEDE_IOU for tb in threat_boxes
+        ):
             continue
 
         x, y, w, h = (int(v) for v in det.bbox)

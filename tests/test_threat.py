@@ -225,6 +225,68 @@ class TestConstruction:
         assert fake_threat_yolo.last_kwargs["conf"] == 0.5
 
 
+class _BoxWithXYXY(_Box):
+    def __init__(self, cls_id, conf, xyxy):
+        super().__init__(cls_id, conf)
+        self.xyxy = [np.array(xyxy, dtype=float)]
+
+
+class TestDetectThreats:
+    """
+    The cascade path: one whole-frame inference returning the threat
+    model's own person boxes.
+    """
+
+    def test_returns_only_dangerous_boxes(self, weights, fake_threat_yolo):
+        fake_threat_yolo.boxes_to_return = [
+            _BoxWithXYXY(CLASS_NORMAL, 0.90, [0, 0, 50, 100]),
+            _BoxWithXYXY(CLASS_DANGEROUS, 0.62, [200, 10, 260, 210]),
+        ]
+        clf = ThreatClassifier(weights)
+
+        found = clf.detect_threats(_frame())
+
+        assert len(found) == 1
+        assert found[0].is_dangerous is True
+        assert found[0].confidence == pytest.approx(0.62)
+
+    def test_converts_xyxy_to_xywh(self, weights, fake_threat_yolo):
+        """ARGUS bboxes are (x, y, w, h); ultralytics reports xyxy."""
+        fake_threat_yolo.boxes_to_return = [
+            _BoxWithXYXY(CLASS_DANGEROUS, 0.7, [200, 10, 260, 210]),
+        ]
+        clf = ThreatClassifier(weights)
+
+        assert clf.detect_threats(_frame())[0].bbox == (200, 10, 60, 200)
+
+    def test_returns_every_dangerous_person(self, weights, fake_threat_yolo):
+        fake_threat_yolo.boxes_to_return = [
+            _BoxWithXYXY(CLASS_DANGEROUS, 0.7, [0, 0, 40, 80]),
+            _BoxWithXYXY(CLASS_DANGEROUS, 0.5, [100, 0, 140, 80]),
+        ]
+        clf = ThreatClassifier(weights)
+
+        assert len(clf.detect_threats(_frame())) == 2
+
+    def test_empty_when_nothing_dangerous(self, weights, fake_threat_yolo):
+        fake_threat_yolo.boxes_to_return = [
+            _BoxWithXYXY(CLASS_NORMAL, 0.95, [0, 0, 50, 100]),
+        ]
+        clf = ThreatClassifier(weights)
+
+        assert clf.detect_threats(_frame()) == []
+
+    def test_inference_failure_returns_empty(self, weights, monkeypatch):
+        class _Boom(_FakeThreatYOLO):
+            def __call__(self, image, **kwargs):
+                raise RuntimeError("cuda is on fire")
+
+        monkeypatch.setattr(threat_module, "_ULTRALYTICS_AVAILABLE", True)
+        monkeypatch.setattr(threat_module, "_YOLO", _Boom)
+
+        assert ThreatClassifier(weights).detect_threats(_frame()) == []
+
+
 class _ShapeRecordingYOLO(_FakeThreatYOLO):
     """Records the shape of every crop handed to the model."""
 
@@ -288,16 +350,16 @@ class TestCropping:
 class _StubClassifier:
     """Stands in for ThreatClassifier inside DetectionService."""
 
-    def __init__(self, result=None, raises=False):
-        self.result = result
+    def __init__(self, results=None, raises=False):
+        self.results = results or []
         self.raises = raises
         self.calls = 0
 
-    def classify_region(self, frame, bbox):
+    def detect_threats(self, frame):
         self.calls += 1
         if self.raises:
             raise RuntimeError("inference exploded")
-        return self.result
+        return list(self.results)
 
 
 class _HumanYOLO:
@@ -332,14 +394,17 @@ def human_yolo(monkeypatch):
     monkeypatch.setattr(detection_module, "_YOLO", _HumanYOLO)
 
 
+def _threat(conf=0.62, bbox=(100, 100, 80, 200)):
+    return ThreatResult(is_dangerous=True, confidence=conf, bbox=bbox)
+
+
 class TestCascadeStage:
     """Where the threat stage sits in process_frame()."""
 
     def test_dangerous_person_detection_emitted(self, human_yolo):
         service = DetectionService()
         service.initialize()
-        stub = _StubClassifier(ThreatResult(is_dangerous=True, confidence=0.62))
-        service.attach_threat_classifier(stub)
+        service.attach_threat_classifier(_StubClassifier([_threat(0.62)]))
 
         service.process_frame(_frame(0))
         detections = service.process_frame(_moving_frame())
@@ -348,30 +413,61 @@ class TestCascadeStage:
         assert len(threats) == 1
         assert threats[0].confidence == pytest.approx(0.62)
 
-    def test_normal_person_emits_no_threat(self, human_yolo):
+    def test_no_threats_found_emits_nothing(self, human_yolo):
         service = DetectionService()
         service.initialize()
-        service.attach_threat_classifier(
-            _StubClassifier(ThreatResult(is_dangerous=False, confidence=0.86))
-        )
+        service.attach_threat_classifier(_StubClassifier([]))
 
         service.process_frame(_frame(0))
         detections = service.process_frame(_moving_frame())
 
         assert not [d for d in detections if d.type is DetectionType.DANGEROUS_PERSON]
 
-    def test_stage_skipped_when_no_humans(self, monkeypatch):
-        """Threat classification is per-person; no person means no work."""
+    def test_multiple_threats_each_get_their_own_box(self, human_yolo):
+        service = DetectionService()
+        service.initialize()
+        service.attach_threat_classifier(_StubClassifier([
+            _threat(0.7, (10, 10, 50, 100)),
+            _threat(0.5, (200, 20, 60, 120)),
+        ]))
+
+        service.process_frame(_frame(0))
+        detections = service.process_frame(_moving_frame())
+
+        threats = [d for d in detections if d.type is DetectionType.DANGEROUS_PERSON]
+        assert len(threats) == 2
+        assert {t.bbox for t in threats} == {(10, 10, 50, 100), (200, 20, 60, 120)}
+
+    def test_runs_even_when_coco_finds_no_human(self, monkeypatch):
+        """
+        Regression: gating the threat stage behind a COCO human box lost
+        20% of true positives on the upstream test set -- the object model
+        simply never found those people. Recall 0.612 vs 0.800. The threat
+        model locates people itself, so motion alone must be enough.
+        """
         monkeypatch.setattr(detection_module, "_ULTRALYTICS_AVAILABLE", True)
         monkeypatch.setattr(detection_module, "_YOLO", _EmptyYOLO)
 
         service = DetectionService()
         service.initialize()
-        stub = _StubClassifier(ThreatResult(is_dangerous=True, confidence=0.9))
+        stub = _StubClassifier([_threat(0.9)])
         service.attach_threat_classifier(stub)
 
         service.process_frame(_frame(0))
-        service.process_frame(_moving_frame())
+        detections = service.process_frame(_moving_frame())
+
+        assert stub.calls == 1, "threat stage was gated behind a COCO human box"
+        assert [d for d in detections if d.type is DetectionType.DANGEROUS_PERSON]
+
+    def test_stage_skipped_without_motion(self, human_yolo):
+        """Motion still gates everything expensive."""
+        service = DetectionService()
+        service.initialize()
+        stub = _StubClassifier([_threat()])
+        service.attach_threat_classifier(stub)
+
+        service.process_frame(_frame(0))
+        service.process_frame(_frame(0))   # identical: no motion
 
         assert stub.calls == 0
 
@@ -400,19 +496,17 @@ class TestCascadeStage:
 
         assert not [d for d in detections if d.type is DetectionType.DANGEROUS_PERSON]
 
-    def test_threat_bbox_matches_the_person_bbox(self, human_yolo):
+    def test_threat_uses_its_own_bbox(self, human_yolo):
+        """The threat model detects people itself; its box is authoritative."""
         service = DetectionService()
         service.initialize()
-        service.attach_threat_classifier(
-            _StubClassifier(ThreatResult(is_dangerous=True, confidence=0.7))
-        )
+        service.attach_threat_classifier(_StubClassifier([_threat(0.7, (7, 9, 11, 13))]))
 
         service.process_frame(_frame(0))
         detections = service.process_frame(_moving_frame())
 
-        human = next(d for d in detections if d.type is DetectionType.HUMAN)
         threat = next(d for d in detections if d.type is DetectionType.DANGEROUS_PERSON)
-        assert threat.bbox == human.bbox
+        assert threat.bbox == (7, 9, 11, 13)
 
 
 class TestStatus:
@@ -464,14 +558,45 @@ class TestThreatOverlay:
     """
 
     def _frame_and_dets(self):
-        bbox = (100, 100, 80, 200)
+        # Deliberately not identical: the two boxes come from different
+        # models and agree closely but never exactly.
         return (
             np.zeros((480, 640, 3), dtype=np.uint8),
             [
-                Detection(type=DetectionType.HUMAN, confidence=0.86, bbox=bbox),
-                Detection(type=DetectionType.DANGEROUS_PERSON, confidence=0.70, bbox=bbox),
+                Detection(type=DetectionType.HUMAN, confidence=0.86,
+                          bbox=(100, 100, 80, 200)),
+                Detection(type=DetectionType.DANGEROUS_PERSON, confidence=0.70,
+                          bbox=(104, 96, 78, 205)),
             ],
         )
+
+    def test_overlapping_boxes_are_deduplicated(self):
+        """
+        Regression: dedup keyed on exact bbox equality stopped working the
+        moment threat boxes came from the threat model instead of being
+        copied from the COCO person box. Overlap is the right test.
+        """
+        frame, dets = self._frame_and_dets()
+        assert dets[0].bbox != dets[1].bbox
+
+        out = draw_detections(frame, dets)
+
+        painted = {tuple(int(c) for c in px) for px in out.reshape(-1, 3) if px.any()}
+        assert BOX_KNOWN not in painted, "near-identical human box drawn under the threat box"
+
+    def test_distant_boxes_are_both_drawn(self):
+        """Two people standing apart must not collapse into one."""
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+        dets = [
+            Detection(type=DetectionType.HUMAN, confidence=0.86, bbox=(20, 100, 80, 200)),
+            Detection(type=DetectionType.DANGEROUS_PERSON, confidence=0.70, bbox=(400, 100, 80, 200)),
+        ]
+
+        out = draw_detections(frame, dets)
+
+        painted = {tuple(int(c) for c in px) for px in out.reshape(-1, 3) if px.any()}
+        assert BOX_THREAT in painted
+        assert BOX_KNOWN in painted, "a separate person's box was suppressed"
 
     def test_threat_box_supersedes_the_human_box(self):
         frame, dets = self._frame_and_dets()

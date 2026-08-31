@@ -1,0 +1,63 @@
+# Cloudflare Tunnel — ARGUS demo API and dashboard (Raspberry Pi)
+# ═══════════════════════════════════════════════════════════════
+#
+# Exposes the ARGUS API on port 8000, which serves the dashboard, the
+# annotated MJPEG stream, and the face-enrollment endpoints.
+#
+# READ THIS FIRST
+# ───────────────
+# This publishes a LIVE CAMERA FEED and the controls to enroll and delete
+# faces. Two independent gates must both be in place:
+#
+#   1. Cloudflare Access  — authentication at the edge, so unauthenticated
+#                           requests never reach the Pi at all.
+#   2. AUTH_REQUIRED=true — ARGUS's own bearer-token auth, so a
+#                           misconfigured Access policy is not the only
+#                           thing standing between the internet and the
+#                           camera.
+#
+# Use `scripts/run_tunnel.sh`, which refuses to start unless gate 2 is on.
+# See docs/CLOUDFLARE_TUNNEL.md.
+#
+# Setup
+# ─────
+#   1. Install cloudflared (arm64):
+#        curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64.deb -o cloudflared.deb
+#        sudo dpkg -i cloudflared.deb
+#   2. cloudflared tunnel login
+#   3. cloudflared tunnel create argus-demo
+#   4. cloudflared tunnel route dns argus-demo argus.yourdomain.com
+#   5. Edit the hostname and credentials path below.
+#   6. cp config/cloudflared-argus.yml ~/.cloudflared/config.yml
+#   7. scripts/run_tunnel.sh
+#
+# Then add a Cloudflare Access policy for argus.yourdomain.com
+# (Zero Trust -> Access -> Applications). Without it the tunnel is
+# public and only ARGUS's own auth stands in the way.
+
+tunnel: argus-demo
+credentials-file: /home/viccia/.cloudflared/credentials.json
+
+# Survive the flaky-wifi case rather than dropping the demo.
+retries: 5
+grace-period: 30s
+
+ingress:
+  - hostname: argus.yourdomain.com
+    service: http://localhost:8000
+    originRequest:
+      # The MJPEG stream is an infinite response. Without disabling chunked
+      # encoding and raising the idle timeout, cloudflared buffers it and
+      # the video either stutters or never starts.
+      disableChunkedEncoding: true
+      # Long enough for a continuous stream; the connection is meant to
+      # stay open for the length of the demo.
+      connectTimeout: 30s
+      tlsTimeout: 30s
+      keepAliveTimeout: 90s
+      keepAliveConnections: 10
+      # The Pi serves plain HTTP on loopback; TLS is terminated by
+      # Cloudflare at the edge.
+      noTLSVerify: true
+
+  - service: http_status:404

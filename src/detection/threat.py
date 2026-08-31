@@ -22,7 +22,7 @@ Dependencies:
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 
@@ -85,10 +85,11 @@ CROP_PADDING = 0.15
 
 @dataclass
 class ThreatResult:
-    """Outcome of classifying one person crop."""
+    """Outcome of classifying one region."""
     is_dangerous: bool
     confidence: float
     label: Optional[str] = None  # the model's own class name, for logging
+    bbox: Optional[Tuple[int, int, int, int]] = None  # x, y, w, h
 
 
 class ThreatClassifier:
@@ -186,10 +187,72 @@ class ThreatClassifier:
         return self._classify(crop)
 
     def classify_frame(self, frame: np.ndarray) -> Optional[ThreatResult]:
-        """Classify a whole frame. Used by the offline verification script."""
+        """Reduce a whole frame to its single most important verdict."""
         if frame is None or frame.size == 0:
             return None
         return self._classify(frame)
+
+    def detect_threats(self, frame: np.ndarray) -> List[ThreatResult]:
+        """
+        Find every dangerous person in a frame, with their own boxes.
+
+        This is the cascade's path, and it is a single inference over the
+        whole frame rather than one per person. The model is itself a
+        two-class *person detector*, so it returns the boxes directly --
+        cropping to someone else's person boxes first threw away recall
+        for nothing.
+
+        Measured over the 314-image upstream test set:
+
+            strategy   precision  recall     F1   ms/frame
+            per-crop       0.879   0.612  0.722   26.5 x N people
+            whole-frame    0.901   0.800  0.847   35.6 flat
+
+        Per-crop lost 20% of true positives outright, because the COCO
+        detector never found those people and the crop stage therefore
+        never ran. Whole-frame also costs a constant, where per-crop
+        scales with crowd size and gets *slower* exactly when a booth
+        gets busy.
+
+        Args:
+            frame: Full BGR frame.
+
+        Returns:
+            One ThreatResult per dangerous person, each carrying its own
+            bbox. Empty when nobody is flagged.
+        """
+        if frame is None or frame.size == 0:
+            return []
+
+        try:
+            results = self._model(
+                frame,
+                imgsz=self.imgsz,
+                conf=self.confidence,
+                verbose=False,
+            )
+        except Exception as exc:
+            logger.error("Threat inference error: %s", exc)
+            return []
+
+        found: List[ThreatResult] = []
+
+        for result in results:
+            boxes = getattr(result, "boxes", None)
+            if not boxes:
+                continue
+            for box in boxes:
+                if int(box.cls[0]) != CLASS_DANGEROUS:
+                    continue
+                x1, y1, x2, y2 = (int(v) for v in box.xyxy[0].tolist())
+                found.append(ThreatResult(
+                    is_dangerous=True,
+                    confidence=float(box.conf[0]),
+                    label=self.class_names.get(CLASS_DANGEROUS) if self.class_names else None,
+                    bbox=(x1, y1, x2 - x1, y2 - y1),
+                ))
+
+        return found
 
     def _classify(self, image: np.ndarray) -> Optional[ThreatResult]:
         """

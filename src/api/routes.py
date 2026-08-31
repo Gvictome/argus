@@ -3,11 +3,17 @@ API Routes for THE EYE
 """
 
 from datetime import datetime
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from typing import Optional, List
 
+from src.api.auth import optional_auth, require_auth
+
 router = APIRouter()
+
+# Applied to everything that reads the camera or mutates state. A no-op
+# while AUTH_REQUIRED is false, so the LAN demo flow is unchanged.
+_PROTECTED = [Depends(require_auth)]
 
 
 # ============================================================================
@@ -41,10 +47,41 @@ class EventResponse(BaseModel):
 # Health & Status
 # ============================================================================
 
+def _dashboard_path():
+    from src.config import BASE_DIR
+    return BASE_DIR / "static" / "index.html"
+
+
 @router.get("/", tags=["Health"])
-async def root():
-    """Health check endpoint"""
+async def root(request: Request):
+    """
+    The dashboard for a browser, the health payload for anything else.
+
+    Content-negotiated rather than split across two paths: at a booth the
+    useful behavior is that typing the Pi's address shows the demo, not
+    raw JSON. API clients and the existing health checks send `*/*` or
+    `application/json` and are unaffected.
+    """
+    from fastapi.responses import FileResponse
+
+    accept = request.headers.get("accept", "")
+    if "text/html" in accept:
+        page = _dashboard_path()
+        if page.exists():
+            return FileResponse(page, media_type="text/html")
+
     return {"status": "online", "service": "THE EYE"}
+
+
+@router.get("/dashboard", tags=["Health"], include_in_schema=False)
+async def dashboard():
+    """The dashboard at a stable path, regardless of Accept headers."""
+    from fastapi.responses import FileResponse
+
+    page = _dashboard_path()
+    if not page.exists():
+        raise HTTPException(status_code=404, detail="Dashboard not installed")
+    return FileResponse(page, media_type="text/html")
 
 
 @router.get("/api/status", response_model=StatusResponse, tags=["Health"])
@@ -73,7 +110,7 @@ async def camera_status():
     return camera_service.get_status()
 
 
-@router.post("/api/camera/init", tags=["Camera"])
+@router.post("/api/camera/init", tags=["Camera"], dependencies=_PROTECTED)
 async def camera_init():
     """Initialize the camera"""
     from src.camera import camera_service
@@ -83,7 +120,7 @@ async def camera_init():
     raise HTTPException(status_code=503, detail="Camera initialization failed")
 
 
-@router.get("/api/camera/snapshot", tags=["Camera"])
+@router.get("/api/camera/snapshot", tags=["Camera"], dependencies=_PROTECTED)
 async def camera_snapshot():
     """Capture and return current frame as JPEG"""
     from fastapi.responses import Response
@@ -98,7 +135,7 @@ async def camera_snapshot():
     raise HTTPException(status_code=500, detail="Failed to capture frame")
 
 
-@router.get("/api/camera/stream", tags=["Camera"])
+@router.get("/api/camera/stream", tags=["Camera"], dependencies=_PROTECTED)
 async def camera_stream(detect_every: int = 3, quality: int = 80):
     """
     Live MJPEG video stream with detection overlays burned in.
@@ -127,7 +164,7 @@ async def camera_stream(detect_every: int = 3, quality: int = 80):
     )
 
 
-@router.post("/api/camera/record", tags=["Camera"])
+@router.post("/api/camera/record", tags=["Camera"], dependencies=_PROTECTED)
 async def camera_record(start: bool = True, filename: Optional[str] = None):
     """Start or stop recording"""
     from pathlib import Path
@@ -151,7 +188,7 @@ async def camera_record(start: bool = True, filename: Optional[str] = None):
         return {"recording": False, "message": "Recording stopped"}
 
 
-@router.post("/api/camera/shutdown", tags=["Camera"])
+@router.post("/api/camera/shutdown", tags=["Camera"], dependencies=_PROTECTED)
 async def camera_shutdown():
     """Shutdown the camera"""
     from src.camera import camera_service
@@ -170,7 +207,7 @@ async def detection_status():
     return detection_service.status()
 
 
-@router.get("/api/faces", tags=["Detection"])
+@router.get("/api/faces", tags=["Detection"], dependencies=_PROTECTED)
 async def list_faces():
     """List all known faces"""
     try:
@@ -184,7 +221,7 @@ async def list_faces():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/faces", tags=["Detection"])
+@router.post("/api/faces", tags=["Detection"], dependencies=_PROTECTED)
 async def add_face(name: str):
     """Enroll a new face by capturing a frame from the camera"""
     try:
@@ -220,7 +257,7 @@ async def add_face(name: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/faces/reset", tags=["Detection"])
+@router.post("/api/faces/reset", tags=["Detection"], dependencies=_PROTECTED)
 async def reset_faces():
     """
     Clear every enrolled face (showcase P1-6).
@@ -241,7 +278,7 @@ async def reset_faces():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.delete("/api/faces/{face_id}", tags=["Detection"])
+@router.delete("/api/faces/{face_id}", tags=["Detection"], dependencies=_PROTECTED)
 async def remove_face(face_id: str):
     """Remove a face from the database"""
     try:
@@ -277,7 +314,7 @@ async def get_device(device_id: str):
     raise HTTPException(status_code=404, detail=f"Device {device_id} not found")
 
 
-@router.post("/api/devices/{device_id}", tags=["Automation"])
+@router.post("/api/devices/{device_id}", tags=["Automation"], dependencies=_PROTECTED)
 async def control_device(device_id: str, action: str, value: Optional[str] = None):
     """Control a device"""
     # TODO: Implement device control
@@ -290,7 +327,7 @@ async def list_automations():
     return {"automations": [], "count": 0}
 
 
-@router.post("/api/automations", tags=["Automation"])
+@router.post("/api/automations", tags=["Automation"], dependencies=_PROTECTED)
 async def create_automation(name: str, trigger: dict, action: dict):
     """Create a new automation rule"""
     # TODO: Implement automation creation
@@ -319,20 +356,97 @@ async def get_event(event_id: str):
 # Security
 # ============================================================================
 
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
 @router.post("/api/auth/login", tags=["Security"])
-async def login(username: str, password: str):
-    """Authenticate user"""
-    # TODO: Implement authentication
-    return {"message": "Authentication not implemented", "token": None}
+async def login(body: LoginRequest, request: Request):
+    """
+    Exchange credentials for a bearer token.
+
+    Credentials come in a JSON body, not query parameters: query strings
+    land in server logs, browser history, and proxy logs, and this one
+    would carry the password in plain text.
+    """
+    from src.api.auth import get_security
+
+    security = get_security()
+    if security is None:
+        raise HTTPException(status_code=503, detail="Authentication is not initialized")
+
+    db = getattr(request.app.state, "db", None)
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    user = db.get_user_by_username(body.username)
+    client = request.client.host if request.client else None
+
+    # One message and one code for "no such user" and "wrong password".
+    # Distinguishing them tells an attacker which usernames are real.
+    if user is None or not security.verify_password(body.password, user["password_hash"]):
+        try:
+            db.log_audit(body.username, "login_failed", "bad credentials", client)
+        except Exception:
+            pass
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    from src.config import settings
+    token = security.generate_token(
+        user_id=user["id"],
+        expiry_hours=max(1, settings.TOKEN_EXPIRY // 3600),
+    )
+    try:
+        db.log_audit(body.username, "login", "success", client)
+    except Exception:
+        pass
+
+    return {
+        "token": token,
+        "token_type": "bearer",
+        "username": user["username"],
+        "role": user.get("role", "user"),
+        "expires_in": settings.TOKEN_EXPIRY,
+    }
 
 
 @router.post("/api/auth/logout", tags=["Security"])
-async def logout():
-    """End session"""
+async def logout(request: Request):
+    """Revoke the presented token."""
+    from src.api.auth import get_security
+
+    security = get_security()
+    header = request.headers.get("authorization", "")
+    token = header[7:].strip() if header.lower().startswith("bearer ") else None
+    token = token or request.query_params.get("token")
+
+    if security is not None and token:
+        security.revoke_token(token)
+
     return {"message": "Logged out"}
 
 
-@router.get("/api/logs", tags=["Security"])
+@router.get("/api/auth/me", tags=["Security"])
+async def whoami(user_id: Optional[str] = Depends(optional_auth)):
+    """
+    Whether auth is enforced, and whether the caller is authenticated.
+
+    Deliberately never returns 401. This endpoint's whole job is to let a
+    caller discover the auth state, and guarding it would make "auth is
+    off" indistinguishable from "your token expired" -- which is exactly
+    the confusion the dashboard and the tunnel preflight need to resolve.
+    """
+    from src.config import settings
+
+    return {
+        "auth_required": settings.AUTH_REQUIRED,
+        "authenticated": user_id is not None,
+        "user_id": user_id,
+    }
+
+
+@router.get("/api/logs", tags=["Security"], dependencies=_PROTECTED)
 async def get_audit_logs(limit: int = 100):
     """Get audit logs"""
     # TODO: Query audit log
