@@ -74,7 +74,7 @@ answers, is the one that makes federated learning hard in practice:
 | O6 | Defend the global model from bad contributors | Adversarial tests | Complete |
 | O7 | Operator interface | Live dashboard | Complete |
 | O8 | Authenticated remote access | Tunnel, auth enforced | Complete |
-| O9 | 10–15 FPS on target hardware | Benchmark on the Pi | **Pending hardware** |
+| O9 | 8–12 FPS on target hardware | Benchmark on the Pi | **Pending hardware** |
 
 ---
 
@@ -107,7 +107,7 @@ Cheap tests gate expensive ones, so a still scene costs almost nothing:
 motion (frame differencing)
   ├─ YOLOv8n objects → HUMAN / VEHICLE / ANIMAL / UNKNOWN
   │     └─ if HUMAN: ArcFace identity → FACE
-  └─ YOLO11n threat → DANGEROUS_PERSON
+  └─ YOLO11s threat → DANGEROUS_PERSON
 ```
 
 The threat stage runs on the whole frame rather than on cropped people.
@@ -140,33 +140,54 @@ positive rate." That figure was not measured and is not achievable with
 this class of model. Real numbers, against the 314-image labelled test
 set and 128 ordinary photographs as negatives:
 
-### Face recognition
+### Face recognition — measured on LFW
+
+Labelled Faces in the Wild is the standard verification benchmark, so
+this is comparable to published results rather than self-reported.
+120 identities, 1,200 genuine pairs, 178,500 impostor pairs:
 
 | Measure | Result |
 |---------|--------|
-| Same person, clean stills | **0.986** similarity |
-| Different person, best impostor of five | **0.073** |
-| Separation | **0.913** |
-| False accepts | **0 of 5** |
+| **Verification accuracy** | **0.9996** |
+| True accept rate | 0.9617 |
+| **False accept rate** | **0.0001** (1 in 10,000) |
+| Genuine / impostor separation | 0.648 |
 
-This is the strongest component in the system.
+This is the strongest component in the system, and the shipped threshold
+of 0.40 is already optimal — a tuning pass that changes nothing is still
+a result.
+
+The error that actually occurs is a false *reject*: 3.8% of the time the
+same person is not matched, and the recovery is walking back into frame.
 
 ### Threat detection
 
-| Threshold | Precision | Recall | False alarms per 100 ordinary scenes |
-|----------:|----------:|-------:|-------------------------------------:|
-| 0.35 (upstream default) | 0.901 | 0.800 | 29.7 |
-| **0.55 (ours)** | **0.919** | **0.768** | **18.8** |
-| 0.70 | 0.931 | 0.700 | 10.2 |
+**Read the baseline first.** The test split is 250 positive / 64
+negative, so **a model that fires on every frame scores 0.796 plain
+accuracy** without looking at anything. Plain accuracy on this data is
+close to meaningless; balanced accuracy is 0.500 for that baseline and
+cannot be gamed by imbalance.
 
-We tuned to 0.55. F1 peaks nearer 0.30, but F1 is the wrong objective
-here: at the default, nearly one ordinary scene in three flags somebody
-as armed. Pointed at a visitor walking past a booth, that is both a
-credibility problem and an ethical one.
+Selected by sweeping 48 configurations — two variants, four input sizes,
+six thresholds:
 
-**Stated plainly: recall 0.768 means roughly one armed person in four is
-missed, and about 19 ordinary scenes in 100 raise a false flag.** This is
-a review aid, not a guard. Any claim stronger than that is unsupportable.
+| Config | Bal. acc | Precision | Recall | False alarms |
+|--------|---------:|----------:|-------:|-------------:|
+| yolo11n @416 @0.55 *(first pass)* | 0.751 | 0.919 | 0.768 | 18.8% |
+| **yolo11s @416 @0.70** *(shipped)* | **0.773** | **0.926** | **0.796** | **14.8%** |
+
+The larger variant wins on every axis at once, including a *lower*
+false-alarm rate, and it wins at a **higher** threshold — a more
+confident model can be asked for more before it fires.
+
+**No configuration reached 0.90 plain accuracy.** The best was 0.847,
+which falsely flags 53.9% of ordinary scenes and has a *lower* balanced
+accuracy than the shipped config. Its apparent advantage comes entirely
+from firing more often on a mostly-positive test set.
+
+**Stated plainly: recall 0.796 means about one armed person in five is
+missed, and roughly 15 ordinary scenes in 100 raise a false flag.** This
+is a review aid, not a guard. Any claim stronger is unsupportable.
 
 ### Object classes
 

@@ -1,5 +1,16 @@
 # Jetson Orin Migration
 
+> ## Parked — the project targets Raspberry Pi
+>
+> The build is one Raspberry Pi 5 + AI HAT+ 2 per camera. See
+> [`HAILO_PIPELINE.md`](HAILO_PIPELINE.md) for the live path.
+>
+> Nothing here has been deleted, because none of it is dead weight: the
+> platform detection this document describes is what makes the camera
+> layer pick the right backend per board, and it fixed a real bug that
+> would have broken a Jetson deployment. It stays as a working migration
+> path, not a maintained target.
+
 Moving ARGUS from the Raspberry Pi 5 to a Jetson Orin Nano as the host,
 with two CSI cameras and federated learning against the Pi.
 

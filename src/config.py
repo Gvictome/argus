@@ -50,25 +50,33 @@ class Settings:
     # Disabling this returns the pipeline to pure COCO detection + faces,
     # with no code change -- the demo's escape hatch if the stage misbehaves.
     THREAT_ENABLED: bool = True
-    THREAT_MODEL_PATH: Path = BASE_DIR / "models" / "threat-yolo11n.pt"
-    # Tuned, not inherited. The upstream model card demonstrates at 0.35;
-    # swept against the 314-image labeled test set plus 128 ordinary COCO
-    # images as negatives (scripts/tune_threat_threshold.py):
+    # yolo11s, not 11n: measurably better on every axis (see below).
+    THREAT_MODEL_PATH: Path = BASE_DIR / "models" / "threat-yolo11s.pt"
+    # Tuned by sweep, not inherited. scripts/sweep_threat_config.py over
+    # 48 configurations (2 variants x 4 input sizes x 6 thresholds),
+    # scored against the 314-image labelled test set with 128 ordinary
+    # COCO images as negatives.
     #
-    #   thresh  precision  recall     F1   false alarms per 100 ordinary scenes
-    #     0.35      0.901   0.800  0.847   29.7
-    #     0.55      0.919   0.768  0.837   18.8
-    #     0.70      0.931   0.700  0.799   10.2
+    # READ THE BASELINE FIRST: the test split is 250 positive / 64
+    # negative, so a model that fires on EVERY frame scores 0.796 plain
+    # accuracy. Several configurations barely beat that, and one scores
+    # exactly 0.796. Plain accuracy is close to meaningless here; the
+    # comparison below is balanced accuracy, which is 0.500 for that
+    # always-fire baseline and cannot be gamed by class imbalance.
     #
-    # F1 peaks near 0.30, but F1 is the wrong objective here. At 0.35
-    # nearly one ordinary scene in three flags someone as armed. Pointed
-    # at a booth visitor that is both a credibility problem and an
-    # ethical one. 0.55 gives up 0.03 recall to cut false alarms by 37%.
-    # Raise toward 0.70 for a crowded room; lower only if a missed
-    # detection genuinely costs more than a false accusation.
-    THREAT_CONFIDENCE: float = 0.55
-    # Trained at 832, but that costs ~110ms/frame on x86 and materially more
-    # on a Pi 5 CPU. 416 roughly halves it. Raise on the Orin Nano.
+    #   config                    bal.acc  prec   recall  false alarms
+    #   yolo11n @416 @0.55 (old)    0.751  0.919   0.768     18.8%
+    #   yolo11s @416 @0.70 (now)    0.773  0.926   0.796     14.8%
+    #
+    # The larger variant wins on every axis at once -- including a LOWER
+    # false-alarm rate -- and it wins at a HIGHER threshold, because a
+    # more confident model can be asked for more before it fires.
+    #
+    # Nothing in the sweep reached 0.90 plain accuracy (best 0.847, and
+    # that config falsely flags 53.9% of ordinary scenes). Precision does
+    # exceed 0.92, which is the defensible headline: when ARGUS flags
+    # someone it is right more than nine times in ten.
+    THREAT_CONFIDENCE: float = 0.70
     THREAT_IMGSZ: int = 416
 
     # Event-triggered recording. Cameras run 24/7; disk does not.
@@ -153,9 +161,9 @@ class Settings:
             # Threat detection
             THREAT_ENABLED=os.getenv("THREAT_ENABLED", "true").lower() == "true",
             THREAT_MODEL_PATH=Path(
-                os.getenv("THREAT_MODEL_PATH", BASE_DIR / "models" / "threat-yolo11n.pt")
+                os.getenv("THREAT_MODEL_PATH", BASE_DIR / "models" / "threat-yolo11s.pt")
             ),
-            THREAT_CONFIDENCE=float(os.getenv("THREAT_CONFIDENCE", 0.55)),
+            THREAT_CONFIDENCE=float(os.getenv("THREAT_CONFIDENCE", 0.70)),
             THREAT_IMGSZ=int(os.getenv("THREAT_IMGSZ", 416)),
             # Security
             AUTH_REQUIRED=os.getenv("AUTH_REQUIRED", "false").lower() == "true",

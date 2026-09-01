@@ -76,7 +76,7 @@ Have this table on the poster:
 | `ANIMAL` | Green | YOLOv8n | Cat, dog, horse, sheep, cow |
 | `UNKNOWN` | Green | YOLOv8n | Any of 69 other objects |
 | `FACE` | Green / **Red** | ArcFace | Green = recognised, red = not |
-| `DANGEROUS_PERSON` | **Orange** | YOLO11n | Person with a weapon-like object |
+| `DANGEROUS_PERSON` | **Orange** | YOLO11s | Person with a weapon-like object |
 
 > Seven classes, three separate models. Motion boxes are deliberately not
 > drawn — they cover most of the frame and would bury everything else.
@@ -356,11 +356,18 @@ silent ones.
 ## Questions to expect
 
 **"How accurate is it?"**
-> Face recognition separates the same person from a different person by
-> 0.91 on a 0–1 scale, with zero false accepts across five impostors.
-> Threat detection is precision 0.92, recall 0.77 — so roughly one armed
-> person in four is missed, and about 19 ordinary scenes in 100 raise a
-> false flag. It is a review aid, not a guard.
+> Face recognition is 99.96% verification accuracy on LFW, the standard
+> benchmark — a one-in-ten-thousand false accept rate over 178,000
+> impostor pairs. Threat detection is 92.6% precision: when it flags
+> someone, it is right more than nine times in ten. Recall is 0.80, so
+> about one armed person in five is missed. It is a review aid, not a
+> guard.
+
+**"What is your accuracy number?"**
+> For threat detection, be careful with that word — our test set is 80%
+> positive, so a model that fires on every frame scores 0.796 without
+> looking at anything. We report balanced accuracy, which is 0.5 for that
+> baseline; ours is 0.773. The number worth quoting is precision, 0.926.
 
 **"Why not just use the cloud?"**
 > Because the price of cloud intelligence is your footage. We wanted both

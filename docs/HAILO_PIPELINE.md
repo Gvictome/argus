@@ -1,7 +1,7 @@
 # Hailo Pipeline
 
 Running ARGUS on Raspberry Pi 5 with a Hailo accelerator, one Pi per
-camera, targeting 10–15 FPS.
+camera, targeting 8–12 FPS.
 
 ```
    [Pi 5 + AI HAT+ 2 + camera]  ──┐
@@ -87,9 +87,9 @@ curl localhost:8000/api/detection/status     # "backend": "hailo"
 
 ---
 
-## 3. Hitting 10–15 FPS
+## 3. Hitting 8–12 FPS
 
-10–15 FPS is a comfortable target on this hardware, but **not because of
+8–12 FPS is a comfortable target on this hardware, but **not because of
 YOLO** — and knowing where the time actually goes is what keeps you from
 optimising the wrong stage.
 
@@ -103,7 +103,7 @@ Published throughput for YOLOv8n at 640px:
 
 Real-world numbers run below the published ones — users report roughly
 24 FPS with YOLO11m on the 26 TOPS board — but every figure here clears
-15 FPS by a wide margin.
+12 FPS by a wide margin.
 
 ### The actual bottleneck is ArcFace
 
@@ -118,7 +118,7 @@ Offloading YOLO to the Hailo does not offload the rest of the cascade:
 
 ArcFace is the expensive CPU stage, and it is gated on a human being
 detected — which, at a booth full of people, is most frames. **That is
-what will decide whether you hold 15 FPS**, not object detection.
+what will decide whether you hold 12 FPS**, not object detection.
 
 Levers, in order of preference:
 
@@ -198,7 +198,7 @@ curl localhost:8000/api/detection/status
 | `hailortcli` finds nothing | Wrong runtime package for the board, PCIe ribbon not seated, or no reboot after install. |
 | Export fails on the Pi | Expected — the DFC is x86_64 Linux only. Compile on a workstation. |
 | HEF loads but detects nothing | Compiled for the wrong `--hw-arch`. Hailo-8 and Hailo-10H are not interchangeable. |
-| FPS below 10 with a working Hailo | ArcFace on CPU. Raise `detect_every`, compile the threat model, or reduce the face detector size. |
+| FPS below 8 with a working Hailo | ArcFace on CPU. Raise `detect_every`, compile the threat model, or reduce the face detector size. |
 
 ---
 

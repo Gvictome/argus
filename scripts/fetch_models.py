@@ -41,12 +41,12 @@ VARIANTS = {
     "yolo11n": {
         "asset": "weights-YOLO11n.zip",
         "sha256": "69b1ae121e457b935cd6c3cd4c9bbfd7d8b93d790e6caf923c216a62dedb64c0",
-        "note": "F1 0.74, mAP50 0.78, 2.6M params — the Pi default",
+        "note": "F1 0.74, mAP50 0.78, 2.6M params — smaller, measurably worse",
     },
     "yolo11s": {
         "asset": "weights-YOLO11s.zip",
         "sha256": "b89b090d8d26a1024486b81f3b10acb832c23bee699e1304c0315713ce118983",
-        "note": "F1 0.77, mAP50 0.80 — best accuracy, ~3x the compute",
+        "note": "F1 0.77, mAP50 0.80 — the ARGUS default (see src/config.py)",
     },
     "yolo11s_preprocessing": {
         "asset": "weights-YOLO11s-preprocessing.zip",
@@ -107,7 +107,9 @@ def _download(url: str, dest: Path) -> bool:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Fetch threat-detection weights.")
-    parser.add_argument("--variant", default="yolo11n", help="Which trained variant to fetch.")
+    parser.add_argument("--variant", default="yolo11s",
+                        help="Which trained variant to fetch. Defaults to the "
+                             "one ARGUS ships; see src/config.py for why.")
     parser.add_argument("--list", action="store_true", help="List variants and exit.")
     parser.add_argument("--force", action="store_true", help="Re-download even if present.")
     args = parser.parse_args()
@@ -166,7 +168,7 @@ def main() -> int:
     size_mb = target.stat().st_size / (1024 * 1024)
     _say("PASS", f"Wrote {target} ({size_mb:.1f} MB)")
 
-    default = MODELS_DIR / "threat-yolo11n.pt"
+    default = MODELS_DIR / "threat-yolo11s.pt"
     if target != default:
         print(f"\nNote: config defaults to {default.name}.")
         print(f"      Point THREAT_MODEL_PATH at {target.name} to use this variant.")
