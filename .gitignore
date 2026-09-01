@@ -91,3 +91,6 @@ htmlcov/
 tmp/
 temp/
 *.tmp
+
+# Generated PDF handouts (rebuild: scripts/build_docs_pdf.py)
+docs/pdf/*.html

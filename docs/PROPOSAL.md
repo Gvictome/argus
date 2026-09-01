@@ -1,595 +1,330 @@
-# ARGUS - AI-Powered Home Security & Automation System
-## Senior Design Project Proposal
+# ARGUS — Revised Project Proposal
+
+**Autonomous Residential Guardian & Utility System**
+Senior Design, 2026 · Revision 2 · 2026-09-01
 
 ---
 
-## Executive Summary
+## Revision note
 
-**ARGUS** (Autonomous Residential Guardian & Utility System) is an AI-powered home security and automation platform built on Raspberry Pi 5 hardware. The system provides real-time threat detection, intelligent automation, and seamless integration with existing smart home ecosystems.
+This supersedes the original proposal. It exists because the first
+version described a system we did not end up building, and claimed
+performance we have since measured and found to be wrong. Both are
+corrected below and marked ▲.
 
----
-
-## 1. Project Overview
-
-### 1.1 Problem Statement
-Traditional home security systems are:
-- Reactive rather than proactive
-- Expensive with monthly subscription fees
-- Limited in customization and automation
-- Prone to false alarms without intelligent filtering
-
-### 1.2 Proposed Solution
-ARGUS leverages edge AI computing to provide:
-- Real-time person/object detection and recognition
-- Behavioral anomaly detection
-- Intelligent automation based on presence and context
-- Local processing for privacy and low latency
-- No cloud dependency or subscription fees
-
-### 1.3 Project Objectives
-1. Design and implement a functional AI security system
-2. Achieve <500ms detection-to-alert latency
-3. Maintain >95% detection accuracy with <5% false positive rate
-4. Create intuitive mobile/web dashboard
-5. Enable voice control integration
+| Area | Original proposal | Revision 2 |
+|------|-------------------|-----------|
+| Object model | MobileNet-SSD, TensorFlow Lite | YOLOv8n via Ultralytics ▲ |
+| Face model | FaceNet + MediaPipe | ArcFace (`buffalo_l`) via InsightFace ▲ |
+| Accuracy claim | ">95% accuracy, <5% false positives" | Measured; see §5. The claim was unsupported ▲ |
+| Threat detection | Not in scope | Third model, integrated and measured ▲ |
+| Federated learning | Mentioned as future work | The project's central contribution ▲ |
+| Licensing | "MIT License" | AGPL-3.0, and required ▲ |
 
 ---
 
-## 2. System Architecture
+## 1. Problem
 
-### 2.1 High-Level Architecture
+Home and small-site security cameras present their owner with a choice
+they should not have to make.
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         ARGUS SYSTEM                                │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────────────┐  │
-│  │   CAPTURE    │    │  PROCESSING  │    │      RESPONSE        │  │
-│  │    LAYER     │───▶│    LAYER     │───▶│       LAYER          │  │
-│  └──────────────┘    └──────────────┘    └──────────────────────┘  │
-│         │                   │                      │                │
-│         ▼                   ▼                      ▼                │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────────────┐  │
-│  │ • Camera     │    │ • AI Engine  │    │ • Alerts/Notifs      │  │
-│  │ • Sensors    │    │ • Detection  │    │ • Automation         │  │
-│  │ • Audio      │    │ • Tracking   │    │ • Recording          │  │
-│  │ • Motion     │    │ • Analysis   │    │ • Dashboard          │  │
-│  └──────────────┘    └──────────────┘    └──────────────────────┘  │
-│                                                                     │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │                    INTEGRATION LAYER                         │   │
-│  │  HomeAssistant │ MQTT │ Telegram │ Discord │ Local API      │   │
-│  └─────────────────────────────────────────────────────────────┘   │
-│                                                                     │
-└─────────────────────────────────────────────────────────────────────┘
-```
+**Cloud systems** send continuous footage of private space to a vendor's
+servers. They work well, they improve over time because the vendor
+aggregates everyone's video, and they charge a subscription indefinitely.
+The price of the intelligence is the footage.
 
-### 2.2 Layered Architecture Detail
+**Local systems** keep the footage private and cost nothing per month.
+They also never improve: the model shipped on the device is the model it
+has forever, and it was trained on scenes that look nothing like the
+customer's front door.
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        APPLICATION LAYER                            │
-│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐   │
-│  │  Web UI     │ │  Mobile App │ │ Voice Ctrl  │ │  REST API   │   │
-│  └─────────────┘ └─────────────┘ └─────────────┘ └─────────────┘   │
-├─────────────────────────────────────────────────────────────────────┤
-│                         SERVICE LAYER                               │
-│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐   │
-│  │  Detection  │ │  Automation │ │  Recording  │ │  Alerting   │   │
-│  │  Service    │ │  Service    │ │  Service    │ │  Service    │   │
-│  └─────────────┘ └─────────────┘ └─────────────┘ └─────────────┘   │
-├─────────────────────────────────────────────────────────────────────┤
-│                        AI/ML LAYER                                  │
-│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐   │
-│  │  YOLOv8     │ │  Face Rec   │ │  Pose Est   │ │  Anomaly    │   │
-│  │  Detection  │ │  (ArcFace)  │ │  (MoveNet)  │ │  Detection  │   │
-│  └─────────────┘ └─────────────┘ └─────────────┘ └─────────────┘   │
-├─────────────────────────────────────────────────────────────────────┤
-│                       HARDWARE LAYER                                │
-│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐   │
-│  │ Raspberry   │ │  AI HAT+    │ │   Camera    │ │  Sensors    │   │
-│  │ Pi 5 8GB    │ │  (Hailo-8L) │ │  Module 3   │ │  (PIR/Door) │   │
-│  └─────────────┘ └─────────────┘ └─────────────┘ └─────────────┘   │
-└─────────────────────────────────────────────────────────────────────┘
-```
+The trade is treated as fundamental. It is not.
 
 ---
 
-## 3. Hardware Components
+## 2. Proposal
 
-### 3.1 Core Components
+ARGUS is an edge security system where **all video is processed and
+stored on the customer's own device**, and where **the detection model
+still improves over time** by learning across every deployment — without
+any footage being transmitted.
 
-| Component | Model | Purpose | Est. Cost |
-|-----------|-------|---------|-----------|
-| **SBC** | Raspberry Pi 5 (8GB) | Main processing unit | $80 |
-| **AI Accelerator** | Raspberry Pi AI HAT+ | 26 TOPS neural acceleration | $70 |
-| **Camera** | Raspberry Pi Camera Module 3 | 12MP, HDR, autofocus | $35 |
-| **Storage** | Samsung EVO 128GB microSD | OS and recordings | $20 |
-| **Power** | Official Pi 5 27W PSU | Stable power delivery | $15 |
-| **Case** | Argon ONE V3 or Custom | Cooling + protection | $25 |
-| **Total** | | | **~$245** |
+The mechanism is federated learning. Each device trains on what its own
+camera saw; every two weeks it sends only the resulting *model changes*
+— arrays of numbers — to a central server, which combines them into an
+improved shared model and sends it back.
 
-### 3.2 Optional/Extended Components
+The research question this raises, and the one the project actually
+answers, is the one that makes federated learning hard in practice:
 
-| Component | Model | Purpose | Est. Cost |
-|-----------|-------|---------|-----------|
-| PIR Sensor | HC-SR501 | Motion detection backup | $5 |
-| Door Sensor | MC-38 | Entry point monitoring | $8 |
-| IR Illuminator | 850nm LED Array | Night vision enhancement | $15 |
-| Microphone | USB or I2S MEMS | Audio detection/voice | $10 |
-| Speaker | 3W amplified | Alerts/deterrent | $8 |
-| NVMe SSD | 256GB M.2 | Extended recording storage | $40 |
-
-### 3.3 Hardware Block Diagram
-
-```
-                           ┌─────────────────────┐
-                           │   Power Supply      │
-                           │   27W USB-C         │
-                           └──────────┬──────────┘
-                                      │
-                                      ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      RASPBERRY PI 5 (8GB)                       │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │
-│  │   BCM2712   │  │   8GB       │  │   Peripherals           │  │
-│  │   Quad A76  │  │   LPDDR4X   │  │   USB 3.0, GPIO, PCIe   │  │
-│  │   2.4GHz    │  │             │  │   Ethernet, WiFi, BT    │  │
-│  └─────────────┘  └─────────────┘  └─────────────────────────┘  │
-│                            │                                     │
-│                     ┌──────┴──────┐                             │
-│                     │   PCIe x4   │                             │
-│                     └──────┬──────┘                             │
-└────────────────────────────┼────────────────────────────────────┘
-                             │
-                             ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    AI HAT+ (Hailo-8L)                           │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │              26 TOPS Neural Processing Unit              │    │
-│  │   • YOLOv8 inference at 30+ FPS                         │    │
-│  │   • Multiple concurrent models                          │    │
-│  │   • Low power consumption (~3W typical)                 │    │
-│  └─────────────────────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────────────┘
-                             │
-         ┌───────────────────┼───────────────────┐
-         │                   │                   │
-         ▼                   ▼                   ▼
-┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
-│  Camera Module  │ │   PIR Sensor    │ │   Door/Window   │
-│  • 12MP Sony    │ │   • HC-SR501    │ │   • MC-38       │
-│  • 120° FOV     │ │   • GPIO 17     │ │   • GPIO 27     │
-│  • HDR + AF     │ │                 │ │                 │
-│  • CSI-2        │ │                 │ │                 │
-└─────────────────┘ └─────────────────┘ └─────────────────┘
-```
+> **If devices we do not control contribute to a shared model, how do we
+> stop one broken or malicious device from degrading it for everyone?**
 
 ---
 
-## 4. Software Architecture
+## 3. Objectives
 
-### 4.1 Technology Stack
-
-| Layer | Technology | Purpose |
-|-------|------------|---------|
-| **OS** | Raspberry Pi OS (64-bit) | Optimized Linux base |
-| **Runtime** | Python 3.11+ | Core application logic |
-| **AI Framework** | Hailo Runtime + ONNX | Model inference |
-| **Detection** | YOLOv8n/s (Hailo-optimized) | Object detection |
-| **Face Recognition** | ArcFace/InsightFace | Known person identification |
-| **Video** | Picamera2 + libcamera | Camera interface |
-| **Streaming** | FFmpeg + HLS | Live view streaming |
-| **Database** | SQLite + Redis | Events and caching |
-| **API** | FastAPI | REST endpoints |
-| **Frontend** | React + TailwindCSS | Web dashboard |
-| **Messaging** | MQTT (Mosquitto) | Event distribution |
-| **Integration** | Home Assistant | Smart home ecosystem |
-
-### 4.2 Software Component Diagram
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                           ARGUS CORE                                │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │                    MAIN CONTROLLER                           │   │
-│  │              (argus/core/controller.py)                      │   │
-│  └──────────────────────────┬──────────────────────────────────┘   │
-│                             │                                       │
-│         ┌───────────────────┼───────────────────┐                  │
-│         ▼                   ▼                   ▼                  │
-│  ┌─────────────┐     ┌─────────────┐     ┌─────────────┐          │
-│  │   CAPTURE   │     │  DETECTION  │     │   ACTION    │          │
-│  │   MODULE    │────▶│   ENGINE    │────▶│   ENGINE    │          │
-│  └─────────────┘     └─────────────┘     └─────────────┘          │
-│         │                   │                   │                  │
-│         ▼                   ▼                   ▼                  │
-│  ┌─────────────┐     ┌─────────────┐     ┌─────────────┐          │
-│  │ • Camera    │     │ • YOLO      │     │ • Alerts    │          │
-│  │ • Sensors   │     │ • FaceRec   │     │ • Recording │          │
-│  │ • Audio     │     │ • Tracking  │     │ • Automation│          │
-│  │ • Streaming │     │ • Anomaly   │     │ • Logging   │          │
-│  └─────────────┘     └─────────────┘     └─────────────┘          │
-│                                                                     │
-├─────────────────────────────────────────────────────────────────────┤
-│                        DATA LAYER                                   │
-│  ┌─────────────┐     ┌─────────────┐     ┌─────────────┐          │
-│  │   SQLite    │     │    Redis    │     │ File System │          │
-│  │   Events    │     │   Cache     │     │  Recordings │          │
-│  └─────────────┘     └─────────────┘     └─────────────┘          │
-├─────────────────────────────────────────────────────────────────────┤
-│                      INTEGRATION LAYER                              │
-│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌────────────┐   │
-│  │    MQTT     │ │  REST API   │ │  WebSocket  │ │ HomeAssist │   │
-│  └─────────────┘ └─────────────┘ └─────────────┘ └────────────┘   │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-### 4.3 AI Pipeline
-
-```
-┌───────────────────────────────────────────────────────────────────┐
-│                      AI DETECTION PIPELINE                        │
-└───────────────────────────────────────────────────────────────────┘
-
-  Frame Input                Processing                    Output
-  ──────────                 ──────────                    ──────
-       │                          │                           │
-       ▼                          ▼                           ▼
-┌─────────────┐           ┌─────────────┐           ┌─────────────┐
-│   Camera    │           │   Hailo-8L  │           │   Action    │
-│   1080p     │──────────▶│   NPU       │──────────▶│   Engine    │
-│   30 FPS    │           │             │           │             │
-└─────────────┘           └─────────────┘           └─────────────┘
-       │                          │                           │
-       │                          │                           │
-       ▼                          ▼                           ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                                                                 │
-│   STAGE 1: DETECTION          STAGE 2: RECOGNITION             │
-│   ──────────────────          ────────────────────             │
-│                                                                 │
-│   ┌─────────────────┐         ┌─────────────────┐              │
-│   │    YOLOv8n      │         │    ArcFace      │              │
-│   │    ────────     │         │    ────────     │              │
-│   │  • Person       │   ───▶  │  • Known faces  │              │
-│   │  • Vehicle      │         │  • Strangers    │              │
-│   │  • Animal       │         │  • Confidence   │              │
-│   │  • Package      │         │                 │              │
-│   └─────────────────┘         └─────────────────┘              │
-│           │                           │                        │
-│           │         STAGE 3: ANALYSIS │                        │
-│           │         ─────────────────                          │
-│           │                           │                        │
-│           ▼                           ▼                        │
-│   ┌─────────────────────────────────────────────────┐          │
-│   │              DECISION ENGINE                     │          │
-│   │  ┌─────────────┐  ┌─────────────┐  ┌─────────┐  │          │
-│   │  │ Zone Check  │  │ Time Rules  │  │ Anomaly │  │          │
-│   │  │ • Entry     │  │ • Schedule  │  │ • Loiter│  │          │
-│   │  │ • Perimeter │  │ • Away mode │  │ • Speed │  │          │
-│   │  │ • Restricted│  │ • Night     │  │ • Count │  │          │
-│   │  └─────────────┘  └─────────────┘  └─────────┘  │          │
-│   └─────────────────────────────────────────────────┘          │
-│                               │                                │
-│                               ▼                                │
-│   ┌─────────────────────────────────────────────────┐          │
-│   │              OUTPUT ACTIONS                      │          │
-│   │  • Push Notification (Telegram/Discord/App)     │          │
-│   │  • Start Recording (H.264 clip)                 │          │
-│   │  • Trigger Automation (lights, siren, lock)     │          │
-│   │  • Log Event (SQLite + timestamp + thumbnail)   │          │
-│   │  • Stream Alert (WebSocket to dashboard)        │          │
-│   └─────────────────────────────────────────────────┘          │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-
-PERFORMANCE TARGETS:
-┌─────────────────────────────────────────────────────────────────┐
-│  • Frame Rate:        30 FPS input, 15-30 FPS inference        │
-│  • Latency:           <100ms detection, <500ms end-to-end      │
-│  • Accuracy:          >95% mAP for person detection            │
-│  • False Positive:    <5% with zone + time filtering           │
-│  • Power:             <15W typical system consumption          │
-└─────────────────────────────────────────────────────────────────┘
-```
+| # | Objective | Measure | Status |
+|---|-----------|---------|--------|
+| O1 | Multi-class detection on-device | 7 classes, measured stability | Complete |
+| O2 | Face recognition, enrol and match live | Verified on hardware | Complete |
+| O3 | Threat detection as a distinct stage | Measured against ground truth | Complete |
+| O4 | Footage never leaves the device | Structural, not policy | Complete |
+| O5 | Federated learning on a 14-day cycle | Survives reboots | Complete |
+| O6 | Defend the global model from bad contributors | Adversarial tests | Complete |
+| O7 | Operator interface | Live dashboard | Complete |
+| O8 | Authenticated remote access | Tunnel, auth enforced | Complete |
+| O9 | 10–15 FPS on target hardware | Benchmark on the Pi | **Pending hardware** |
 
 ---
 
-## 5. Development Pipeline
+## 4. System design
 
-### 5.1 Project Timeline (16 Weeks)
-
-```
-PHASE 1: FOUNDATION (Weeks 1-4)
-═══════════════════════════════════════════════════════════════════
-Week 1-2: Hardware Setup & Environment
-  ├─ Raspberry Pi 5 initial setup
-  ├─ AI HAT+ installation and driver configuration
-  ├─ Camera Module 3 integration
-  ├─ Development environment (VS Code Remote, Git)
-  └─ Baseline performance benchmarks
-
-Week 3-4: Core Infrastructure
-  ├─ Project structure and architecture
-  ├─ Camera capture pipeline (Picamera2)
-  ├─ Basic frame processing loop
-  ├─ SQLite database schema
-  └─ Configuration management system
-
-PHASE 2: AI INTEGRATION (Weeks 5-8)
-═══════════════════════════════════════════════════════════════════
-Week 5-6: Object Detection
-  ├─ YOLOv8 model optimization for Hailo
-  ├─ Model conversion (ONNX → HEF)
-  ├─ Hailo runtime integration
-  ├─ Detection pipeline implementation
-  └─ Performance optimization (target: 30 FPS)
-
-Week 7-8: Advanced Recognition
-  ├─ Face detection integration
-  ├─ Face embedding extraction (ArcFace)
-  ├─ Known faces database
-  ├─ Tracking between frames (SORT/DeepSORT)
-  └─ Zone definition and monitoring
-
-PHASE 3: AUTOMATION & ALERTS (Weeks 9-12)
-═══════════════════════════════════════════════════════════════════
-Week 9-10: Alert System
-  ├─ Event classification engine
-  ├─ Push notification integration (Telegram/Discord)
-  ├─ Recording service (H.264 clips)
-  ├─ Thumbnail generation
-  └─ Event logging and storage
-
-Week 11-12: Automation Engine
-  ├─ Rule engine design
-  ├─ Time-based schedules
-  ├─ Presence detection modes
-  ├─ Home Assistant integration
-  └─ MQTT event publishing
-
-PHASE 4: USER INTERFACE (Weeks 13-14)
-═══════════════════════════════════════════════════════════════════
-Week 13: Backend API
-  ├─ FastAPI REST endpoints
-  ├─ WebSocket live streaming
-  ├─ Authentication/authorization
-  ├─ Settings and configuration API
-  └─ Event history API
-
-Week 14: Frontend Dashboard
-  ├─ React dashboard scaffolding
-  ├─ Live video feed component
-  ├─ Event timeline view
-  ├─ Zone configuration UI
-  └─ Mobile-responsive design
-
-PHASE 5: TESTING & DOCUMENTATION (Weeks 15-16)
-═══════════════════════════════════════════════════════════════════
-Week 15: Testing & Optimization
-  ├─ Unit and integration tests
-  ├─ Performance benchmarking
-  ├─ Edge case handling
-  ├─ Power consumption optimization
-  └─ Memory leak detection
-
-Week 16: Documentation & Presentation
-  ├─ Technical documentation
-  ├─ User manual
-  ├─ API documentation
-  ├─ Presentation preparation
-  └─ Demo video production
-```
-
-### 5.2 Gantt Chart
+Nine subsystems; full plain-language treatment in
+[`SUBSYSTEMS.md`](SUBSYSTEMS.md).
 
 ```
-Week:        1   2   3   4   5   6   7   8   9  10  11  12  13  14  15  16
-             ├───┼───┼───┼───┼───┼───┼───┼───┼───┼───┼───┼───┼───┼───┼───┤
-
-PHASE 1      ████████████████
-Hardware     ████████
-Core Infra           ████████
-
-PHASE 2                      ████████████████
-Detection                    ████████
-Recognition                          ████████
-
-PHASE 3                                      ████████████████
-Alerts                                       ████████
-Automation                                           ████████
-
-PHASE 4                                                      ████████
-Backend                                                      ████
-Frontend                                                         ████
-
-PHASE 5                                                              ████████
-Testing                                                              ████
-Docs                                                                     ████
-
-MILESTONES:
-  M1 (Week 4):  Hardware functional, camera streaming ◆
-  M2 (Week 8):  AI detection working at 30 FPS       ◆
-  M3 (Week 12): Full automation and alerts           ◆
-  M4 (Week 14): Complete dashboard                   ◆
-  M5 (Week 16): Final presentation ready             ◆
+   camera ─▶ capture ─▶ DETECTION CASCADE ─┬─▶ annotation ─▶ dashboard
+                                            ├─▶ event recording ─▶ disk
+                                            └─▶ database
+                                                    │
+                                            local training data
+                                                    │
+                                            (every 14 days)
+                                                    ▼
+                                          weights only ─▶ central server
+                                                              │
+                                                    screening + aggregation
+                                                              │
+                                          new global model ◀───┘
 ```
 
----
+### 4.1 The cascade
 
-## 6. Directory Structure
+Cheap tests gate expensive ones, so a still scene costs almost nothing:
 
 ```
-argus/
-├── README.md
-├── requirements.txt
-├── setup.py
-├── config/
-│   ├── argus.yaml              # Main configuration
-│   ├── zones.yaml              # Detection zones
-│   ├── faces/                  # Known faces database
-│   └── models/                 # AI model files (.hef)
-├── src/
-│   ├── __init__.py
-│   ├── main.py                 # Entry point
-│   ├── core/
-│   │   ├── controller.py       # Main controller
-│   │   ├── config.py           # Configuration management
-│   │   └── events.py           # Event bus
-│   ├── capture/
-│   │   ├── camera.py           # Camera interface
-│   │   ├── sensors.py          # GPIO sensors
-│   │   └── stream.py           # HLS streaming
-│   ├── detection/
-│   │   ├── detector.py         # YOLO detection
-│   │   ├── faces.py            # Face recognition
-│   │   ├── tracker.py          # Object tracking
-│   │   └── zones.py            # Zone management
-│   ├── actions/
-│   │   ├── alerts.py           # Notification service
-│   │   ├── recording.py        # Video recording
-│   │   ├── automation.py       # Home automation
-│   │   └── logging.py          # Event logging
-│   ├── api/
-│   │   ├── app.py              # FastAPI application
-│   │   ├── routes/             # API endpoints
-│   │   └── websocket.py        # WebSocket handler
-│   └── integrations/
-│       ├── mqtt.py             # MQTT client
-│       ├── homeassistant.py    # HA integration
-│       ├── telegram.py         # Telegram bot
-│       └── discord.py          # Discord webhook
-├── web/                        # React frontend
-│   ├── src/
-│   ├── public/
-│   └── package.json
-├── tests/
-│   ├── test_detection.py
-│   ├── test_camera.py
-│   └── test_api.py
-├── scripts/
-│   ├── install.sh              # Installation script
-│   ├── convert_model.py        # ONNX to HEF conversion
-│   └── benchmark.py            # Performance testing
-└── docs/
-    ├── architecture.md
-    ├── api.md
-    └── user_guide.md
+motion (frame differencing)
+  ├─ YOLOv8n objects → HUMAN / VEHICLE / ANIMAL / UNKNOWN
+  │     └─ if HUMAN: ArcFace identity → FACE
+  └─ YOLO11n threat → DANGEROUS_PERSON
 ```
 
----
+The threat stage runs on the whole frame rather than on cropped people.
+This was measured, not assumed: cropping to detected people lost **31% of
+recall**, because 20% of armed people were never found by the object
+model in the first place, so the crop stage never ran on them.
 
-## 7. Key Features
+### 4.2 Hardware
 
-### 7.1 Core Security Features
+| Component | Part | Role |
+|-----------|------|------|
+| Compute | Raspberry Pi 5 (8 GB) | One per camera node |
+| Accelerator | AI HAT+ 2 (Hailo-10H, 40 TOPS INT8, 8 GB) | Runs both YOLO models |
+| Camera | Camera Module 3 (IMX708) | CSI |
+| Server | Any always-on host | Global model, aggregation |
 
-| Feature | Description | Priority |
-|---------|-------------|----------|
-| **Person Detection** | Detect humans in frame with bounding boxes | P0 |
-| **Face Recognition** | Identify known vs unknown persons | P0 |
-| **Motion Zones** | Define areas of interest for monitoring | P0 |
-| **Intrusion Alerts** | Push notifications on unauthorized entry | P0 |
-| **Video Recording** | Capture clips on detection events | P0 |
-| **Live Streaming** | Real-time video feed via HLS/WebRTC | P1 |
-| **Night Vision** | IR-enhanced low-light detection | P1 |
-| **Package Detection** | Identify deliveries at door | P2 |
-| **Vehicle Detection** | Monitor driveway/parking | P2 |
-
-### 7.2 Automation Features
-
-| Feature | Description | Priority |
-|---------|-------------|----------|
-| **Presence Modes** | Home/Away/Night automation profiles | P1 |
-| **Smart Lighting** | Trigger lights on detection | P1 |
-| **Schedule Rules** | Time-based automation triggers | P1 |
-| **Geofencing** | Auto arm/disarm based on phone location | P2 |
-| **Voice Control** | Integration with voice assistants | P2 |
+One Pi per camera. This is a deliberate change from an earlier
+single-host design, and it has a property worth stating: **each camera
+node is an independent federated-learning contributor**, so three cameras
+is three contributors — the threshold at which the defence in §6 becomes
+fully effective. A single host with three cameras is one contributor no
+matter how many cameras it has.
 
 ---
 
-## 8. Risk Assessment
+## 5. Measured performance ▲
 
-| Risk | Impact | Probability | Mitigation |
-|------|--------|-------------|------------|
-| Hailo SDK compatibility issues | High | Medium | Early testing, fallback to CPU inference |
-| Insufficient processing power | High | Low | Model optimization, reduce resolution |
-| Camera latency | Medium | Medium | Direct CSI, optimize pipeline |
-| Power consumption too high | Medium | Low | Power profiling, sleep modes |
-| False positive alerts | Medium | Medium | ML filtering, zone refinement |
-| Network reliability | Low | Medium | Local-first design, offline capability |
+The original proposal claimed ">95% detection accuracy with <5% false
+positive rate." That figure was not measured and is not achievable with
+this class of model. Real numbers, against the 314-image labelled test
+set and 128 ordinary photographs as negatives:
 
----
+### Face recognition
 
-## 9. Success Metrics
+| Measure | Result |
+|---------|--------|
+| Same person, clean stills | **0.986** similarity |
+| Different person, best impostor of five | **0.073** |
+| Separation | **0.913** |
+| False accepts | **0 of 5** |
 
-| Metric | Target | Measurement Method |
-|--------|--------|-------------------|
-| Detection Latency | <100ms | Timestamp analysis |
-| End-to-End Alert Time | <500ms | Event correlation |
-| Detection Accuracy (mAP) | >95% | Test dataset evaluation |
-| False Positive Rate | <5% | Production monitoring |
-| System Uptime | >99.5% | Health monitoring |
-| Power Consumption | <15W idle, <20W active | Power meter |
-| Frame Rate | 30 FPS | Performance profiler |
+This is the strongest component in the system.
 
----
+### Threat detection
 
-## 10. Budget Summary
+| Threshold | Precision | Recall | False alarms per 100 ordinary scenes |
+|----------:|----------:|-------:|-------------------------------------:|
+| 0.35 (upstream default) | 0.901 | 0.800 | 29.7 |
+| **0.55 (ours)** | **0.919** | **0.768** | **18.8** |
+| 0.70 | 0.931 | 0.700 | 10.2 |
 
-| Category | Items | Cost |
-|----------|-------|------|
-| **Hardware (Core)** | Pi 5, AI HAT+, Camera, Storage, PSU, Case | $245 |
-| **Hardware (Extended)** | Sensors, IR, Mic, Speaker | $46 |
-| **Software** | Open source (free) | $0 |
-| **Contingency** | 15% buffer | $44 |
-| **Total** | | **~$335** |
+We tuned to 0.55. F1 peaks nearer 0.30, but F1 is the wrong objective
+here: at the default, nearly one ordinary scene in three flags somebody
+as armed. Pointed at a visitor walking past a booth, that is both a
+credibility problem and an ethical one.
 
----
+**Stated plainly: recall 0.768 means roughly one armed person in four is
+missed, and about 19 ordinary scenes in 100 raise a false flag.** This is
+a review aid, not a guard. Any claim stronger than that is unsupportable.
 
-## 11. Team Responsibilities
+### Object classes
 
-| Role | Responsibilities |
-|------|-----------------|
-| **Hardware Lead** | Pi setup, HAT integration, sensor wiring, power management |
-| **AI/ML Lead** | Model selection, optimization, Hailo integration, accuracy tuning |
-| **Backend Lead** | API development, database design, event system, integrations |
-| **Frontend Lead** | Dashboard UI, mobile responsiveness, live streaming |
-| **Integration Lead** | Home Assistant, MQTT, notification services |
+Stability matters more than peak confidence — a box near the decision
+threshold flickers on and off between frames and reads as broken.
 
----
-
-## 12. References
-
-- [Raspberry Pi 5 Documentation](https://www.raspberrypi.com/documentation/)
-- [Raspberry Pi AI HAT+ Documentation](https://www.raspberrypi.com/documentation/accessories/ai-hat.html)
-- [Hailo Developer Zone](https://hailo.ai/developer-zone/)
-- [YOLOv8 by Ultralytics](https://docs.ultralytics.com/)
-- [Picamera2 Documentation](https://datasheets.raspberrypi.com/camera/picamera2-manual.pdf)
-- [Home Assistant Integration](https://www.home-assistant.io/integrations/)
+| Class | Detections near threshold | Verdict |
+|-------|--------------------------:|---------|
+| VEHICLE | 6% | Most stable |
+| DANGEROUS_PERSON | 4% | Stable |
+| HUMAN | 12–18% | Stable |
+| ANIMAL | 18% | Stable, small sample |
+| UNKNOWN | 24% | Noise; see §8 |
 
 ---
 
-## Appendix A: Prometheus Integration
+## 6. Contribution: defending a federated model ▲
 
-ARGUS integrates with the Prometheus AI Orchestrator for:
-- Voice command control ("Hey Prometheus, arm Argus")
-- Agent status monitoring
-- Cross-project coordination
-- Event logging to Notion
+Standard federated averaging (FedAvg) combines every update it receives.
+One device that is broken, diverged, or hostile therefore moves the
+shared model — and the damaged model is distributed to every other
+device, so a single bad contributor degrades the entire fleet and the
+next round begins from the damage.
 
-```python
-# Example Prometheus command
-prometheus> spawn argus agent
-prometheus> argus status
-prometheus> set argus mode away
-```
+Our aggregator screens updates through four filters, cheapest first:
+
+| # | Filter | Catches |
+|---|--------|---------|
+| 1 | Structural | Malformed shapes, NaN, Inf, false sample counts |
+| 2 | Magnitude | Updates far larger than peers — model-replacement attacks |
+| 3 | Direction | Updates opposing consensus — sign-flip, targeted poisoning |
+| 4 | Trimmed mean | Residual per-coordinate outliers |
+
+Followed by a **validation gate**: the candidate model is scored, and if
+it is worse than the model it would replace, it is discarded and the
+incumbent kept.
+
+Two design decisions worth defending:
+
+- **Screening operates on model *changes*, not model weights.** Raw
+  weights are dominated by the shared starting point, so two updates that
+  disagree completely still appear nearly identical. Comparing changes is
+  what makes disagreement visible at all.
+- **Consensus uses the median, not the mean.** The mean is precisely what
+  an attacker manipulates. A median of *n* values tolerates up to
+  (*n*−1)/2 arbitrary corruptions; a mean tolerates none.
+
+### Stated limitation
+
+Filters 3 and 4 compare contributors against each other, so they require
+a majority — **at least three contributors**. With two devices that
+disagree, there is no principled way to determine which is wrong. The
+system detects this condition, reports it, and falls back to filters 1
+and 2 plus the validation gate, which are absolute rather than
+comparative.
+
+Validation: 21 adversarial tests, each implementing an attack and
+asserting the defence holds, including a counterfactual demonstrating
+that the sign-flip attack succeeds against plain averaging.
 
 ---
 
-*Document Version: 1.0*
-*Last Updated: January 2026*
-*Project: ARGUS Senior Design*
+## 7. Privacy
+
+| Leaves the device | Never leaves the device |
+|-------------------|-------------------------|
+| Model weight arrays | Camera frames |
+| A count of training samples | Recorded clips |
+| Loss and accuracy numbers | Face images |
+| A device identifier | Face embeddings |
+
+**Face identity never participates in federated learning at all.** Face
+embeddings are stored in each device's local database and used only for
+matching there; they are not part of the model that federates, so they
+cannot appear in any update.
+
+**One honest clarification:** federated learning means data does not
+*leave* the device. It does not mean data is not *stored*. Each device
+keeps small training crops and event clips locally, on hardware the
+customer owns. "We never store your footage" would be false; "your
+footage never leaves your device" is true.
+
+---
+
+## 8. Scope: what is not built
+
+Named deliberately, because a proposal that lists only successes is not
+useful for evaluation.
+
+**Security**
+- No cryptographic signing of updates. A device is identified by a string
+  it chooses; the defence is against bad *updates*, not forged
+  identities.
+- No secure aggregation. The server sees each device's update
+  individually.
+- No differential privacy. No formal guarantee, only the structural one.
+- Encryption at rest is a stub. Face embeddings are stored unencrypted.
+
+**Detection**
+- `UNKNOWN` covers 69 unmapped object classes and produces visual noise.
+  Filtering it is a one-line change but a product decision.
+- No night vision. No component in the system addresses low light, and
+  the cameras have no IR illumination.
+
+**Deployment**
+- Robust aggregation is complete and tested but **not yet connected to
+  the Flower server**, which still runs standard FedAvg.
+- No Hailo hardware has been run against this code. The compilation path
+  and probe logic are implemented and tested; end-to-end frame rate on
+  the accelerator is unverified.
+
+---
+
+## 9. Licensing ▲
+
+The original proposal stated MIT. That was not accurate and not
+available.
+
+ARGUS links Ultralytics (AGPL-3.0) and ships a third-party
+threat-detection model that is also AGPL-3.0. AGPL's network clause
+applies because ARGUS serves video over a network. The project is
+therefore **AGPL-3.0**, with third-party components and dataset
+attribution recorded in `NOTICE.md`.
+
+The repository previously had no licence file at all, only a line in the
+README. That gap is closed.
+
+---
+
+## 10. Verification
+
+| Area | Tests |
+|------|------:|
+| Detection cascade | 11 |
+| Threat stage | 30 |
+| Face recognition + API | 35 |
+| Authentication | 33 |
+| Robust aggregation (adversarial) | 21 |
+| Event recording | 18 |
+| Federated scheduling | 23 |
+| Platform + multi-camera | 35 |
+| Dashboard, streaming, other | 43 |
+| **Total** | **249** |
+
+All passing. Tests are the largest single body of code in the project
+(2,959 lines against 1,960 for the detection subsystem), which is
+deliberate: the failures that matter on a demo day are the silent ones —
+the ones where the system reports success and detects nothing.
+
+---
+
+## 11. Remaining work
+
+| Item | Blocking? |
+|------|-----------|
+| Benchmark on Pi + Hailo hardware | **Yes** — O9 is unverified |
+| Connect robust aggregation to the Flower server | **Yes** — the contribution is not live |
+| Compile both models for Hailo (needs an x86-64 Linux host) | Yes |
+| Three-node federated run | Demonstrates the full defence |
+| Threshold tuning under venue lighting | Recommended |
+| Night-vision decision | Scope call |
