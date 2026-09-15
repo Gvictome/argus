@@ -130,6 +130,7 @@ class DetectionService:
         self.object_model = None      # YOLOv8n YOLO instance
         self.face_cascade = None      # cv2.CascadeClassifier
         self.face_recognizer = None   # FaceRecognitionService (set via attach_face_recognizer)
+        self.collector = None         # EventCollector (set via attach_collector)
         self.threat_classifier = None  # ThreatClassifier (set via attach_threat_classifier)
         self.previous_frame = None    # for frame differencing
         self.backend = "none"         # "hailo" | "cpu" | "none"
@@ -386,6 +387,17 @@ class DetectionService:
         self.face_recognizer = recognizer
         logger.info("FaceRecognitionService attached to DetectionService")
 
+    def attach_collector(self, collector) -> None:
+        """
+        Attach an EventCollector so resolved detections become training data.
+
+        Without this nothing in the pipeline is ever persisted: db.log_event
+        exists and was never called, so /api/events returned an empty list
+        and the federated head had nothing to learn from.
+        """
+        self.collector = collector
+        logger.info("EventCollector attached to DetectionService")
+
     def attach_threat_classifier(self, classifier) -> None:
         """
         Attach a ThreatClassifier for the dangerous-person cascade stage.
@@ -480,6 +492,17 @@ class DetectionService:
             # alone rather than behind a COCO human box. Gating it on one
             # cost 20% of true positives on the upstream test set.
             all_detections.extend(self.detect_threats(frame))
+
+        # Feed the collector so resolved tracks become federated training
+        # samples. Wrapped because a collector fault must never take down
+        # the detection loop -- losing training data is recoverable, losing
+        # the camera during a demo is not.
+        collector = getattr(self, "collector", None)
+        if collector is not None:
+            try:
+                collector.observe(all_detections, frame.shape[:2])
+            except Exception as exc:
+                logger.warning("EventCollector.observe failed: %s", exc)
 
         return all_detections
 

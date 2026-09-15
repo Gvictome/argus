@@ -26,13 +26,19 @@ class TestHealthEndpoints:
         assert data["service"] == "THE EYE"
 
     def test_status_endpoint(self, client):
-        """Test status endpoint returns system info"""
+        """Status matches the argus-dashboard contract.
+
+        The status strip reads exactly these four fields (lib/api.ts
+        StatusResponse). The previous shape -- status/version/services -- was
+        a hardcoded stub that reported every service as "stopped".
+        """
         response = client.get("/api/status")
         assert response.status_code == 200
         data = response.json()
-        assert data["status"] == "operational"
-        assert "services" in data
-        assert "version" in data
+        assert isinstance(data["fps"], (int, float))
+        assert isinstance(data["accelerator"], str)
+        assert isinstance(data["model_version"], str)
+        assert isinstance(data["nodes_online"], int)
 
 
 class TestCameraEndpoints:

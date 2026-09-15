@@ -84,19 +84,16 @@ async def dashboard():
     return FileResponse(page, media_type="text/html")
 
 
-@router.get("/api/status", response_model=StatusResponse, tags=["Health"])
-async def get_status():
-    """Get system status"""
-    return StatusResponse(
-        status="operational",
-        version="0.1.0",
-        services={
-            "camera": "stopped",
-            "detection": "stopped",
-            "automation": "stopped",
-            "security": "active"
-        }
-    )
+@router.get("/api/status", tags=["Health"])
+async def get_status(request: Request):
+    """System status in the dashboard contract shape.
+
+    Was a hardcoded stub reporting every service as "stopped" regardless of
+    what was running. Now reports real FPS and the accelerator actually in
+    use, which is what the dashboard status strip renders.
+    """
+    from src.api.dashboard_routes import build_status
+    return build_status(request)
 
 
 # ============================================================================
@@ -492,10 +489,15 @@ async def create_automation(name: str, trigger: dict, action: dict):
 # ============================================================================
 
 @router.get("/api/events", tags=["Events"])
-async def list_events(limit: int = 50, offset: int = 0, event_type: Optional[str] = None):
-    """Get event history"""
-    # TODO: Query events from database
-    return {"events": [], "count": 0, "limit": limit, "offset": offset}
+async def list_events(request: Request, limit: int = 50):
+    """Detection events, newest first.
+
+    Returns a bare array, not an envelope: lib/api.ts types this as
+    DetectionEvent[] and indexes it directly. Synthetic bootstrap rows are
+    excluded -- the dashboard should only ever show what a camera saw.
+    """
+    from src.api.dashboard_routes import build_events
+    return build_events(request, limit)
 
 
 @router.get("/api/events/{event_id}", tags=["Events"])

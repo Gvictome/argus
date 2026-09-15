@@ -3,6 +3,7 @@ FastAPI application factory
 """
 
 import logging
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,6 +11,8 @@ from fastapi.staticfiles import StaticFiles
 
 from src.config import settings, BASE_DIR
 from src.api.routes import router as api_router
+from src.api.trial_routes import router as trial_router
+from src.api.dashboard_routes import router as dashboard_router
 from src.detection.models import ModelManager
 from src.training import LocalTrainer
 from src.federated.client import ArgusFlowerClient
@@ -59,6 +62,10 @@ def create_app() -> FastAPI:
 
     # Include API routes
     app.include_router(api_router)
+    # Federated-trial endpoints and the dashboard compatibility aliases.
+    app.include_router(trial_router)
+    # adam9798/argus-dashboard backend contract.
+    app.include_router(dashboard_router)
 
     @app.on_event("startup")
     async def startup_event():
@@ -161,6 +168,35 @@ def create_app() -> FastAPI:
                 logger.warning("Event recording unavailable: %s", exc)
         else:
             logger.info("Event recording disabled via RECORD_EVENTS")
+
+        # Federated head, sample store, and the collector that feeds them.
+        # These come up regardless of FL_ENABLED: capturing and labelling
+        # samples is useful long before any round is scheduled, and the
+        # trial endpoints 503 without them.
+        try:
+            from src.federated.head import FederatedHead
+            from src.federated.store import SampleStore
+            from src.federated.collector import EventCollector
+
+            app.state.fl_head = FederatedHead(seed=0)
+            app.state.fl_store = SampleStore(
+                Path(settings.FL_TRAINING_DIR) / "samples.jsonl"
+            )
+            app.state.fl_collector = EventCollector(
+                store=app.state.fl_store, db=db,
+            )
+            detection_service.attach_collector(app.state.fl_collector)
+            logger.info(
+                "Federated head ready: %d params, %d samples on disk",
+                app.state.fl_head.n_params,
+                app.state.fl_store.stats()["total"],
+            )
+        except Exception as exc:
+            # The detection pipeline must still run if this fails.
+            logger.warning("Federated head/collector unavailable: %s", exc)
+            app.state.fl_head = None
+            app.state.fl_store = None
+            app.state.fl_collector = None
 
         # Start Federated Learning scheduler if enabled
         if settings.FL_ENABLED:

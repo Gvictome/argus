@@ -94,3 +94,6 @@ temp/
 
 # Generated PDF handouts (rebuild: scripts/build_docs_pdf.py)
 docs/pdf/*.html
+
+# Simulator run output (event logs, captured reports)
+sim/_run/

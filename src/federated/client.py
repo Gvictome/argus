@@ -166,10 +166,19 @@ def start_client(server_url: str, client: ArgusFlowerClient) -> None:
         )
 
     logger.info("Connecting to FL server at %s", server_url)
-    fl.client.start_numpy_client(
-        server_address=server_url,
-        client=client,
-    )
+    # flwr removed start_numpy_client in 1.36. The replacement takes a Client,
+    # not a NumPyClient, so the adapter call is required. Both paths are kept
+    # because requirements.txt still allows anything >=1.13.
+    if hasattr(fl.client, "start_client"):
+        fl.client.start_client(
+            server_address=server_url,
+            client=client.to_client(),
+        )
+    else:  # flwr < 1.13
+        fl.client.start_numpy_client(
+            server_address=server_url,
+            client=client,
+        )
     logger.info("FL client finished")
 
 

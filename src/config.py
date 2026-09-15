@@ -118,6 +118,10 @@ class Settings:
     AUTOMATION_ENABLED: bool = True
 
     # Federated Learning
+    # Shown verbatim in the dashboard event list.
+    NODE_NAME: str = "Node A"
+    CAMERA_ZONE: str = "Front door"
+
     FL_ENABLED: bool = False
     FL_SERVER_URL: str = "localhost:8080"
     FL_LOCAL_EPOCHS: int = 5
@@ -169,6 +173,8 @@ class Settings:
             AUTH_REQUIRED=os.getenv("AUTH_REQUIRED", "false").lower() == "true",
             CORS_ORIGINS=os.getenv("CORS_ORIGINS", ""),
             # Federated Learning
+            NODE_NAME=os.getenv("NODE_NAME", "Node A"),
+            CAMERA_ZONE=os.getenv("CAMERA_ZONE", "Front door"),
             FL_ENABLED=os.getenv("FL_ENABLED", "false").lower() == "true",
             FL_SERVER_URL=os.getenv("FL_SERVER_URL", "localhost:8080"),
             FL_LOCAL_EPOCHS=int(os.getenv("FL_LOCAL_EPOCHS", 5)),
