@@ -332,6 +332,50 @@ class TestHeadWeightIsolation:
                        zip(candidate.get_weights(), before))
 
 
+class TestSnapshotWithWorkerRunning:
+    """The worker owns the camera; a second read returns nothing."""
+
+    class _Worker:
+        running = True
+
+        def latest(self):
+            return np.full((48, 64, 3), 120, dtype=np.uint8), [], 7
+
+    def test_snapshot_serves_the_workers_frame(self):
+        from fastapi.testclient import TestClient
+
+        from src.api.app import create_app
+
+        app = create_app()
+        with TestClient(app) as client:
+            app.state.detection_worker = self._Worker()
+
+            response = client.get("/api/camera/snapshot")
+
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "image/jpeg"
+        assert len(response.content) > 100
+
+    def test_no_frame_yet_says_so_rather_than_returning_nothing(self):
+        from fastapi.testclient import TestClient
+
+        from src.api.app import create_app
+
+        class _Empty:
+            running = True
+
+            def latest(self):
+                return None, [], 0
+
+        app = create_app()
+        with TestClient(app) as client:
+            app.state.detection_worker = _Empty()
+
+            response = client.get("/api/camera/snapshot")
+
+        assert response.status_code == 503
+
+
 class TestCameraColourOrder:
     """Red and blue were exchanged on the Pi path, so people looked blue."""
 

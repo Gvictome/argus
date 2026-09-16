@@ -119,10 +119,30 @@ async def camera_init():
 
 
 @router.get("/api/camera/snapshot", tags=["Camera"], dependencies=_PROTECTED)
-async def camera_snapshot():
-    """Capture and return current frame as JPEG"""
+async def camera_snapshot(request: Request, annotated: bool = False):
+    """One frame as JPEG.
+
+    When the background worker is running it owns the camera, and a second
+    read from another thread comes back empty -- so this endpoint returned
+    nothing while the worker was healthy and the stream was fine. Serve the
+    worker's current frame instead, with `annotated=1` to burn its boxes in.
+    """
+    import cv2
     from fastapi.responses import Response
     from src.camera import camera_service
+
+    worker = getattr(request.app.state, "detection_worker", None)
+    if worker is not None and worker.running:
+        frame, detections, _ = worker.latest()
+        if frame is None:
+            raise HTTPException(status_code=503, detail="No frame captured yet")
+        if annotated:
+            from src.detection.annotate import draw_detections
+            frame = draw_detections(frame, detections)
+        ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+        if not ok:
+            raise HTTPException(status_code=500, detail="Failed to encode frame")
+        return Response(content=buf.tobytes(), media_type="image/jpeg")
 
     if not camera_service.is_initialized:
         raise HTTPException(status_code=503, detail="Camera not initialized. Call /api/camera/init first")
