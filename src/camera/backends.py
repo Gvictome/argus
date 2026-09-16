@@ -183,12 +183,14 @@ class Picamera2Backend(CaptureBackend):
         framerate: int = 30,
         autofocus_mode: str = "continuous",
         fmt: str = "RGB888",
+        swap_rb: bool = False,
     ):
         self.camera_num = camera_num
         self.resolution = resolution
         self.framerate = framerate
         self.autofocus_mode = autofocus_mode
         self.format = fmt
+        self.swap_rb = swap_rb
         self._cam = None
 
     def open(self) -> bool:
@@ -235,9 +237,18 @@ class Picamera2Backend(CaptureBackend):
         except Exception as exc:
             logger.warning("picamera2 capture failed: %s", exc)
             return None
-        # picamera2 hands back RGB; the rest of ARGUS is BGR throughout.
-        if frame is not None and frame.ndim == 3 and frame.shape[2] == 3:
-            return frame[:, :, ::-1]
+        # picamera2's format names describe byte order, not numpy channel
+        # order, so "RGB888" already arrives as BGR -- which is what OpenCV
+        # and the rest of ARGUS expect. Reversing it here unconditionally
+        # is what turned people blue on the live feed.
+        #
+        # Camera stacks differ, so the swap stays available behind
+        # CAMERA_SWAP_RB for the case where a sensor really does hand back
+        # RGB. ascontiguousarray because a negative-stride view breaks
+        # several OpenCV calls downstream, including the JPEG encoder.
+        if (self.swap_rb and frame is not None
+                and frame.ndim == 3 and frame.shape[2] == 3):
+            return np.ascontiguousarray(frame[:, :, ::-1])
         return frame
 
     def close(self) -> None:
@@ -359,6 +370,7 @@ def build_backend(board, sensor_id: int, config) -> CaptureBackend:
             framerate=config.framerate,
             autofocus_mode=config.autofocus_mode,
             fmt=config.format,
+            swap_rb=getattr(config, "swap_rb", False),
         )
 
     return OpenCVBackend(

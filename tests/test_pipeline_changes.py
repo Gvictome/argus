@@ -332,6 +332,55 @@ class TestHeadWeightIsolation:
                        zip(candidate.get_weights(), before))
 
 
+class TestCameraColourOrder:
+    """Red and blue were exchanged on the Pi path, so people looked blue."""
+
+    class _Cam:
+        def __init__(self, arr):
+            self.arr = arr
+
+        def capture_array(self):
+            return self.arr
+
+    def _frame(self):
+        arr = np.zeros((2, 2, 3), dtype=np.uint8)
+        arr[..., 0] = 10    # first channel
+        arr[..., 2] = 200   # third channel
+        return arr
+
+    def test_frames_pass_through_untouched_by_default(self):
+        """picamera2's "RGB888" is already BGR; reversing it is the bug."""
+        from src.camera.backends import Picamera2Backend
+
+        backend = Picamera2Backend()
+        backend._cam = self._Cam(self._frame())
+
+        out = backend.read()
+
+        assert out[0, 0, 0] == 10 and out[0, 0, 2] == 200
+
+    def test_swap_rb_exchanges_channels_and_keeps_it_contiguous(self):
+        """A negative-stride view breaks OpenCV calls, including JPEG encode."""
+        from src.camera.backends import Picamera2Backend
+
+        backend = Picamera2Backend(swap_rb=True)
+        backend._cam = self._Cam(self._frame())
+
+        out = backend.read()
+
+        assert out[0, 0, 0] == 200 and out[0, 0, 2] == 10
+        assert out.flags["C_CONTIGUOUS"]
+
+    def test_setting_reaches_the_backend(self):
+        from src.camera import CameraConfig
+        from src.camera.backends import build_backend
+        from src.camera.platform_detect import Board
+
+        backend = build_backend(Board.RASPBERRY_PI, 0, CameraConfig(swap_rb=True))
+
+        assert backend.swap_rb is True
+
+
 class TestArgusClassTaxonomy:
     """person / vehicle / animal / package, and nothing landing in the wrong one."""
 

@@ -309,6 +309,7 @@ carried-item classes. Everything else COCO knows is dropped before NMS.
 | `rpicam-hello` lists no cameras | Ribbon cable | Power off, reseat both ends |
 | `Device or resource busy` | Another process has the camera | Close it; restart Terminal 1 |
 | `backend: cpu` on the Pi | No NCNN export | `python scripts/export_cpu_models.py --format ncnn` |
+| People look blue on the live feed | Red and blue channels exchanged | Should be right by default; if your sensor really does hand back RGB, set `CAMERA_SWAP_RB=true` and restart |
 | Dashboard status "offline", curl works | CORS | `CORS_ORIGINS` must include `http://localhost:3000` |
 | Event list stale | Dashboard loads once | Refresh the page |
 | Round returns 409 | Too few labelled samples | Bootstrap (section C) |

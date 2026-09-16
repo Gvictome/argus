@@ -34,6 +34,9 @@ class Settings:
     CAMERA_RESOLUTION: tuple = (1920, 1080)
     CAMERA_FPS: int = 30
     CAMERA_ROTATION: int = 0
+    # Only if this camera really does hand back RGB. Symptom of getting it
+    # wrong: people look blue on the live feed.
+    CAMERA_SWAP_RB: bool = False
     # A video file (or a numeric capture index) to use instead of the
     # board's camera. Lets the whole pipeline run against a recording on a
     # dev machine, and makes benchmarks repeatable.
@@ -193,6 +196,7 @@ class Settings:
             DEBUG=os.getenv("DEBUG", "false").lower() == "true",
             SECRET_KEY=os.getenv("SECRET_KEY", "dev-secret-change-in-production"),
             CAMERA_INDEX=int(os.getenv("CAMERA_INDEX", 0)),
+            CAMERA_SWAP_RB=os.getenv("CAMERA_SWAP_RB", "false").lower() == "true",
             CAMERA_SOURCE=os.getenv("CAMERA_SOURCE", ""),
             CAMERA_SOURCE_REALTIME=os.getenv("CAMERA_SOURCE_REALTIME", "true").lower() == "true",
             MOTION_SENSITIVITY=int(os.getenv("MOTION_SENSITIVITY", 25)),

@@ -184,14 +184,33 @@ class TestIdleGate:
 
 class TestStatus:
     def test_status_reports_the_schedule(self, scheduler):
-        scheduler.mark_round_complete(datetime(2026, 9, 1, 2, 0))
+        """Relative to now, never a literal calendar date.
+
+        This pinned 2026-09-01 and 2026-09-15, and started failing the day
+        real time passed the second one: the round became overdue and
+        next_due correctly answered "now" rather than the printed date.
+        A test that expires on a given date tests the calendar, not the
+        arithmetic.
+        """
+        last = datetime.now() - timedelta(days=1)
+        scheduler.mark_round_complete(last)
 
         status = scheduler.status()
 
         assert status["interval_days"] == 14
-        assert status["last_round_at"].startswith("2026-09-01")
-        assert status["next_due_at"].startswith("2026-09-15")
-        assert status["seconds_until_next"] >= 0
+        assert status["last_round_at"].startswith(last.strftime("%Y-%m-%d"))
+        assert status["next_due_at"].startswith(
+            scheduler.scheduled_target().strftime("%Y-%m-%dT%H"))
+        # Thirteen days out, give or take the configured round hour.
+        assert 12 * 86400 < status["seconds_until_next"] < 14 * 86400
+
+    def test_an_overdue_round_runs_now_not_an_interval_later(self, scheduler):
+        """The behaviour the date-pinned test was accidentally exercising."""
+        scheduler.mark_round_complete(datetime.now() - timedelta(days=30))
+
+        status = scheduler.status()
+
+        assert status["seconds_until_next"] == 0
 
     def test_status_before_any_round(self, scheduler):
         status = scheduler.status()

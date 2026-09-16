@@ -57,6 +57,9 @@ class CameraConfig:
     sensor_id: int = 0
     # Human label for the dashboard ("Front door", "Back gate").
     name: str = "camera0"
+    # Exchange red and blue on capture. Off by default: picamera2's
+    # "RGB888" already delivers BGR, which is what the pipeline wants.
+    swap_rb: bool = False
     # Video file path or capture index that overrides the board camera.
     source: str = ""
     # Pace a file source to its own frame rate, like a live camera.
@@ -416,6 +419,7 @@ def build_registry_from_settings(settings) -> CameraRegistry:
         registry.add(CameraConfig(
             resolution=getattr(settings, "CAMERA_RESOLUTION", (1920, 1080)),
             framerate=getattr(settings, "CAMERA_FPS", 30),
+            swap_rb=getattr(settings, "CAMERA_SWAP_RB", False),
             rotation=getattr(settings, "CAMERA_ROTATION", 0),
             sensor_id=sensor_id,
             name=name.strip(),

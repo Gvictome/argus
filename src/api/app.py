@@ -107,6 +107,7 @@ def create_app() -> FastAPI:
             rotation=settings.CAMERA_ROTATION,
             sensor_id=settings.CAMERA_INDEX,
             name="primary",
+            swap_rb=settings.CAMERA_SWAP_RB,
             source=settings.CAMERA_SOURCE,
             realtime=settings.CAMERA_SOURCE_REALTIME,
         )
