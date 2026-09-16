@@ -81,9 +81,16 @@ class TestPageContents:
         assert external == [], f"external resources would break offline: {external}"
 
     def test_talks_to_the_real_endpoints(self, page):
-        for path in ("/api/detection/status", "/api/faces",
+        """/api/faces is gone: face recognition was deprecated 2026-09-14."""
+        for path in ("/api/status", "/api/detection/status", "/api/events",
                      "/api/camera/stream", "/api/auth/login"):
             assert path in page, f"dashboard never calls {path}"
+
+    def test_shows_live_throughput_and_events(self, page):
+        """The page exists to answer 'is it running and did it see me'."""
+        assert "detect_fps" in page, "no live frame rate on the page"
+        assert "open_tracks" in page, "nothing shows a detection in progress"
+        assert "setInterval" in page, "page never refreshes"
 
     def test_stream_carries_a_token(self, page):
         """

@@ -609,7 +609,7 @@ class DetectionService:
         collector = getattr(self, "collector", None)
         if collector is not None:
             try:
-                collector.observe(all_detections, frame.shape[:2])
+                collector.observe(all_detections, frame.shape[:2], frame=frame)
             except Exception as exc:
                 logger.warning("EventCollector.observe failed: %s", exc)
 

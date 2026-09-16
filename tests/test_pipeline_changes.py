@@ -332,6 +332,92 @@ class TestHeadWeightIsolation:
                        zip(candidate.get_weights(), before))
 
 
+class TestSnapshotsAndClips:
+    """Every stored event keeps a still; every clip lands in the events table."""
+
+    def _collector(self, tmp_path):
+        from src.federated.collector import EventCollector
+        from src.federated.store import SampleStore
+
+        class _DB:
+            def __init__(self):
+                self.events = []
+
+            def log_event(self, **kwargs):
+                self.events.append(kwargs)
+
+        db = _DB()
+        store = SampleStore(tmp_path / "samples.jsonl")
+        collector = EventCollector(store, db=db, snapshot_dir=tmp_path / "snapshots")
+        return collector, store, db
+
+    def test_event_keeps_a_snapshot_and_records_its_path(self, tmp_path):
+        collector, store, db = self._collector(tmp_path)
+
+        for i in range(6):
+            frame = _frame(40, (480, 640, 3))
+            frame[100:300, 200 + i * 5:360 + i * 5] = 220
+            det = Detection(type=DetectionType.HUMAN, confidence=0.9,
+                            bbox=(200 + i * 5, 100, 160, 200))
+            collector.observe([det], (480, 640), when=1000.0 + i * 0.1, frame=frame)
+        collector.flush()
+
+        files = list((tmp_path / "snapshots").glob("*.jpg"))
+        assert len(files) == 1, "no still saved for the event"
+        assert files[0].stat().st_size > 0
+
+        row = store.recent(1)[0]
+        assert row["meta"]["snapshot"] == files[0].name
+        detection_events = [e for e in db.events if e["event_type"] == "detection"]
+        assert detection_events[0]["media_path"].endswith(files[0].name)
+
+    def test_no_frame_means_no_snapshot_but_still_an_event(self, tmp_path):
+        """Callers without a frame keep working."""
+        collector, store, db = self._collector(tmp_path)
+
+        for i in range(6):
+            det = Detection(type=DetectionType.HUMAN, confidence=0.9, bbox=(10, 10, 60, 90))
+            collector.observe([det], (480, 640), when=2000.0 + i * 0.1)
+        collector.flush()
+
+        assert store.stats()["total"] == 1
+        assert not list((tmp_path / "snapshots").glob("*.jpg"))
+
+    def test_discarded_flicker_leaves_no_snapshot_behind(self, tmp_path):
+        collector, store, db = self._collector(tmp_path)
+
+        frame = _frame(40, (480, 640, 3))
+        det = Detection(type=DetectionType.HUMAN, confidence=0.9, bbox=(10, 10, 60, 90))
+        collector.observe([det], (480, 640), when=3000.0, frame=frame)
+        collector.flush()
+
+        assert store.stats()["total"] == 0
+        assert not list((tmp_path / "snapshots").glob("*.jpg"))
+        assert collector._snaps == {}
+
+    def test_finished_clip_is_logged_to_the_events_table(self, tmp_path):
+        from src.detection.event_recorder import EventRecorder, RecorderConfig
+
+        logged = []
+        recorder = EventRecorder(
+            RecorderConfig(pre_roll_s=0.0, post_roll_s=0.1, fps=5,
+                           output_dir=tmp_path / "clips"),
+            camera_name="primary",
+            on_clip=lambda record: logged.append(record),
+        )
+        person = Detection(type=DetectionType.HUMAN, confidence=0.9, bbox=(10, 10, 40, 60))
+        frame = _frame(50, (120, 160, 3))
+
+        recorder.process(frame, [person], now=100.0)
+        recorder.process(frame, [person], now=100.1)
+        recorder.process(frame, [], now=100.5)  # past post-roll, clip closes
+        recorder.close()
+
+        assert logged, "clip finished without notifying anyone"
+        assert logged[0].path.endswith(".mp4")
+        assert logged[0].frames >= 1
+
+
 class TestFixedShapeExports:
     """An export compiled at 640 returns nothing when asked for 416."""
 

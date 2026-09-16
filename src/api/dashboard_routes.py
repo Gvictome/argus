@@ -118,6 +118,10 @@ def _event_from_row(row: dict, head) -> dict:
         "label": label,
         "confidence": int(round(float(x[18]) * 100)),
         "confirmed": confirmed,
+        # Beyond the documented contract and ignored by the Next.js
+        # dashboard; the built-in page uses it to show the still.
+        "snapshot": (f"/api/events/{int(row.get('n') or 0)}/snapshot"
+                     if (row.get("meta") or {}).get("snapshot") else None),
     }
 
 

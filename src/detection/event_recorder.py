@@ -90,9 +90,11 @@ class EventRecorder:
     recorder decides on its own when to open and close a clip.
     """
 
-    def __init__(self, config: Optional[RecorderConfig] = None, camera_name: str = "camera0"):
+    def __init__(self, config: Optional[RecorderConfig] = None,
+                 camera_name: str = "camera0", on_clip=None):
         self.config = config or RecorderConfig()
         self.camera_name = camera_name
+        self._on_clip = on_clip
 
         buffer_frames = max(1, int(self.config.pre_roll_s * self.config.fps))
         self._pre_roll: Deque[np.ndarray] = deque(maxlen=buffer_frames)
@@ -267,6 +269,13 @@ class EventRecorder:
                 frames=self._frames_written,
             )
             self._clips.append(record)
+            if self._on_clip is not None:
+                # A clip nobody can find is a clip that was not saved. The
+                # callback is what puts it in the events table.
+                try:
+                    self._on_clip(record)
+                except Exception as exc:
+                    logger.warning("on_clip callback failed: %s", exc)
             logger.info("Recording saved: %s (%.1fs, %d frames)",
                         self._clip_path.name, duration, self._frames_written)
 

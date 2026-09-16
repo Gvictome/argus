@@ -3,6 +3,7 @@ API Routes for THE EYE
 """
 
 from datetime import datetime
+from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from typing import Optional, List
@@ -525,10 +526,51 @@ async def list_events(request: Request, limit: int = 50):
 
 
 @router.get("/api/events/{event_id}", tags=["Events"])
-async def get_event(event_id: str):
-    """Get event details"""
-    # TODO: Query event by ID
-    raise HTTPException(status_code=404, detail=f"Event {event_id} not found")
+async def get_event(event_id: int, request: Request):
+    """One event, in the same shape as the list."""
+    from src.api.dashboard_routes import _event_from_row
+
+    store = getattr(request.app.state, "fl_store", None)
+    row = store.by_n(event_id) if store is not None else None
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Event {event_id} not found")
+    return _event_from_row(row, getattr(request.app.state, "fl_head", None))
+
+
+@router.get("/api/events/{event_id}/snapshot", tags=["Events"], dependencies=_PROTECTED)
+async def event_snapshot(event_id: int, request: Request):
+    """The still saved for this event.
+
+    Resolved through the event's own record rather than from a filename in
+    the URL, so no request can reach outside the snapshot directory.
+    """
+    from fastapi.responses import FileResponse
+
+    store = getattr(request.app.state, "fl_store", None)
+    row = store.by_n(event_id) if store is not None else None
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Event {event_id} not found")
+
+    name = (row.get("meta") or {}).get("snapshot")
+    collector = getattr(request.app.state, "fl_collector", None)
+    base = getattr(collector, "snapshot_dir", None)
+    if not name or base is None:
+        raise HTTPException(status_code=404, detail="No snapshot for this event")
+
+    path = (Path(base) / name).resolve()
+    if not str(path).startswith(str(Path(base).resolve())) or not path.exists():
+        raise HTTPException(status_code=404, detail="Snapshot missing")
+    return FileResponse(path, media_type="image/jpeg")
+
+
+@router.get("/api/clips", tags=["Camera"], dependencies=_PROTECTED)
+async def list_clips(request: Request, limit: int = 20):
+    """Recorded clips, newest first."""
+    recorder = getattr(request.app.state, "event_recorder", None)
+    if recorder is None:
+        return {"recording": False, "clips": []}
+    return {"recording": recorder.is_recording,
+            "clips": recorder.recent_clips(limit)}
 
 
 # ============================================================================

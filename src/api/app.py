@@ -173,6 +173,22 @@ def create_app() -> FastAPI:
         if settings.RECORD_EVENTS:
             try:
                 from src.detection.event_recorder import EventRecorder, RecorderConfig
+                def _log_clip(record, _db=db):
+                    """Put every finished clip in the events table."""
+                    import json as _json
+                    import uuid as _uuid
+
+                    try:
+                        _db.log_event(
+                            event_id=str(_uuid.uuid4()),
+                            event_type="clip",
+                            source="primary",
+                            data=_json.dumps(record.as_dict()),
+                            media_path=record.path,
+                        )
+                    except Exception as exc:
+                        logger.warning("Could not log clip: %s", exc)
+
                 app.state.event_recorder = EventRecorder(
                     RecorderConfig(
                         pre_roll_s=settings.RECORD_PRE_ROLL_S,
@@ -180,6 +196,7 @@ def create_app() -> FastAPI:
                         max_clip_s=settings.RECORD_MAX_CLIP_S,
                     ),
                     camera_name="primary",
+                    on_clip=_log_clip,
                 )
                 logger.info(
                     "Event recording on — %.0fs pre-roll, %.0fs post-roll",
@@ -205,6 +222,7 @@ def create_app() -> FastAPI:
             )
             app.state.fl_collector = EventCollector(
                 store=app.state.fl_store, db=db,
+                snapshot_dir=Path(settings.DATA_DIR) / "snapshots",
             )
             detection_service.attach_collector(app.state.fl_collector)
             logger.info(

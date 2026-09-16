@@ -60,6 +60,42 @@ Open `http://localhost:3000`, log in as `admin` / `argus-demo`.
 
 ---
 
+## A2 · The built-in live page (nothing to install)
+
+The node serves its own page. Same origin as the API, so no CORS, no
+separate server, no npm:
+
+```
+http://<node-address>:8000/dashboard
+```
+
+It shows the annotated live feed, **detection FPS refreshed every second**,
+the backend and model version, how many objects are in frame right now, and
+recent events with the still saved for each one. It is the fastest way to
+confirm "it is running and it saw me" from any machine that can reach the
+node.
+
+The raw feed on its own, with boxes burned in, is at
+`http://<node-address>:8000/api/camera/stream`.
+
+> The Next.js dashboard in section A is the product UI: login, event review,
+> Confirm/Correct labelling. This page is the operator's view of the live
+> node. They read the same API.
+
+### What gets saved
+
+| Kind | Where | Recorded as |
+|---|---|---|
+| A still per event, taken at the object's largest | `DATA_DIR/snapshots/` | `media_path` on the `detection` row, served at `/api/events/{id}/snapshot` |
+| A clip per trigger, with pre- and post-roll | `MEDIA_DIR/events/` | a `clip` row, listed at `/api/clips` |
+| Sustained motion | — | a `motion` row, chunked every 60 s |
+
+Clips are off unless `RECORD_EVENTS=true` (`--record` for the mock demo).
+Stills are always kept: they cost about 30 KB each and are what make an
+event reviewable rather than just a confidence number.
+
+---
+
 ## B · On the Pi (screen mirroring, two terminal windows)
 
 Close every terminal first.

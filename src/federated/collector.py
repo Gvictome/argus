@@ -24,6 +24,7 @@ import json
 import logging
 import time
 import uuid
+from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -54,7 +55,8 @@ class EventCollector:
                  max_idle_s: float = 2.0, min_frames: int = 3,
                  source: str = "camera", reach_factor: float = 2.5,
                  motion_min_area: float = 0.002, motion_min_s: float = 1.0,
-                 motion_max_s: float = 60.0):
+                 motion_max_s: float = 60.0, snapshot_dir=None,
+                 snapshot_width: int = 640, snapshot_quality: int = 70):
         self.store = store
         self.db = db
         self.iou_threshold = iou_threshold
@@ -78,11 +80,24 @@ class EventCollector:
         self.motion_max_s = motion_max_s
         self._motion: Optional[dict] = None
         self.motion_events = 0
+        # One still per event, kept beside the row it belongs to. A
+        # confidence number is not reviewable; a picture is. Stored at the
+        # track's largest box rather than its last frame, because by the
+        # time a track closes the subject has usually left.
+        self.snapshot_dir = Path(snapshot_dir) if snapshot_dir else None
+        self.snapshot_width = snapshot_width
+        self.snapshot_quality = snapshot_quality
+        self._snaps: Dict[int, Tuple[float, bytes]] = {}
+        self.snapshots_saved = 0
 
     # ------------------------------------------------------------------
     def observe(self, detections: Sequence, frame_shape: Tuple[int, int],
-                when: Optional[float] = None) -> List[int]:
-        """Feed one frame. Returns ids of tracks updated this frame."""
+                when: Optional[float] = None, frame=None) -> List[int]:
+        """Feed one frame. Returns ids of tracks updated this frame.
+
+        `frame` is optional so callers that only have detections still
+        work; without it, events are stored without a snapshot.
+        """
         now = when or time.time()
         h, w = frame_shape[0], frame_shape[1]
         if not h or not w:
@@ -142,6 +157,8 @@ class EventCollector:
             self._tracks[best_id].update(box, float(det.confidence), now)
             self._boxes[best_id] = box
             touched.append(best_id)
+            if frame is not None and self.snapshot_dir is not None:
+                self._keep_snapshot(best_id, frame, box)
 
         self._close_stale(now)
         return touched
@@ -178,6 +195,47 @@ class EventCollector:
         elif seg is not None and now - seg["last"] > self.max_idle_s:
             self._close_motion()
 
+    def _keep_snapshot(self, tid: int, frame, box) -> None:
+        """Hold the best still seen for this track, encoded, not raw.
+
+        Encoding here costs a few ms and only when the subject gets
+        meaningfully bigger; holding raw frames for every open track would
+        cost megabytes each instead.
+        """
+        area = max(0.0, (box[2] - box[0])) * max(0.0, (box[3] - box[1]))
+        best = self._snaps.get(tid)
+        if best is not None and area < best[0] * 1.15:
+            return
+        try:
+            import cv2
+
+            img = frame
+            h, w = img.shape[:2]
+            if w > self.snapshot_width:
+                scale = self.snapshot_width / float(w)
+                img = cv2.resize(img, (self.snapshot_width, max(1, int(h * scale))),
+                                 interpolation=cv2.INTER_AREA)
+            ok, buf = cv2.imencode(
+                ".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), int(self.snapshot_quality)])
+            if ok:
+                self._snaps[tid] = (area, buf.tobytes())
+        except Exception as exc:
+            logger.warning("collector: snapshot encode failed: %s", exc)
+
+    def _write_snapshot(self, tid: int) -> Optional[str]:
+        best = self._snaps.pop(tid, None)
+        if best is None or self.snapshot_dir is None:
+            return None
+        try:
+            self.snapshot_dir.mkdir(parents=True, exist_ok=True)
+            name = f"{uuid.uuid4().hex}.jpg"
+            (self.snapshot_dir / name).write_bytes(best[1])
+            self.snapshots_saved += 1
+            return name
+        except Exception as exc:
+            logger.warning("collector: snapshot write failed: %s", exc)
+            return None
+
     def _close_motion(self) -> None:
         seg, self._motion = self._motion, None
         if seg is None:
@@ -210,16 +268,20 @@ class EventCollector:
         t = self._tracks.pop(tid, None)
         self._boxes.pop(tid, None)
         if t is None:
+            self._snaps.pop(tid, None)
             return False
 
         # A two-frame blip is a detector flicker, not an event. Recording it
         # would fill the store with noise the operator then has to label.
         if t.frames < self.min_frames:
             self.dropped_short += 1
+            self._snaps.pop(tid, None)
             return False
 
         x = extract(t)
+        snapshot = self._write_snapshot(tid)
         meta = {
+            "snapshot": snapshot,
             "track_id": t.track_id,
             "frames": t.frames,
             "duration_s": round(t.last_seen - t.first_seen, 3),
@@ -245,6 +307,8 @@ class EventCollector:
                         "features": describe(x),
                         **meta,
                     }),
+                    media_path=(str(self.snapshot_dir / snapshot)
+                                if snapshot else None),
                 )
             except Exception as exc:
                 # A logging failure must not take down the capture loop.
@@ -259,6 +323,7 @@ class EventCollector:
             "dropped_short": self.dropped_short,
             "min_frames": self.min_frames,
             "motion_events": self.motion_events,
+            "snapshots_saved": self.snapshots_saved,
             "motion_open": self._motion is not None,
             "reach_factor": self.reach_factor,
             "max_idle_s": self.max_idle_s,
