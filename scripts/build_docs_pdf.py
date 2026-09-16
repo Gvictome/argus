@@ -42,6 +42,20 @@ DEFAULT_DOCS = [
     ("DEMO_SCRIPT", "ARGUS Demo Script", "Walkthrough, queries, codebase"),
 ]
 
+# Plain-language handouts, one topic per PDF so a reader can be given the
+# one part they need. Rendered with --guides, usually into a shared folder
+# rather than the repo.
+GUIDES = [
+    ("guides/01-what-is-argus", "1 · What ARGUS Is", "The system in plain language"),
+    ("guides/02-set-up-the-pi", "2 · Setting Up the Pi", "From a bare Pi to a running camera"),
+    ("guides/03-run-the-demo", "3 · Running the Demo", "What to run, and what to say"),
+    ("guides/04-the-dashboards", "4 · The Dashboards", "Both screens, and what they show"),
+    ("guides/05-what-it-detects", "5 · What It Detects", "The four classes, and how to test them"),
+    ("guides/06-federated-learning", "6 · How the Learning Works", "Sharing what is learned, not what is seen"),
+    ("guides/07-when-things-break", "7 · When Things Break", "Every failure we hit, and the fix"),
+    ("guides/08-for-developers", "8 · For Developers", "Layout, decisions, and open work"),
+]
+
 CHROME_CANDIDATES = [
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
     r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
@@ -180,7 +194,10 @@ def render(md_path: Path, title: str, subtitle: str, out_dir: Path, chrome: str)
 def main() -> int:
     ap = argparse.ArgumentParser(description="Render ARGUS docs to PDF.")
     ap.add_argument("--docs", nargs="*", help="Doc stems, e.g. PROPOSAL.")
-    ap.add_argument("--out-dir", default="docs/pdf")
+    ap.add_argument("--guides", action="store_true",
+                    help="Render the plain-language guide set instead.")
+    ap.add_argument("--out-dir", default="docs/pdf",
+                    help="Output folder; an absolute path is used as given.")
     args = ap.parse_args()
 
     chrome = find_chrome()
@@ -193,11 +210,12 @@ def main() -> int:
     out_dir = BASE_DIR / args.out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    wanted = DEFAULT_DOCS
+    source = GUIDES if args.guides else DEFAULT_DOCS
+    wanted = source
     if args.docs:
         chosen = {d.upper().removesuffix(".MD") for d in args.docs}
-        wanted = [d for d in DEFAULT_DOCS if d[0] in chosen]
-        for name in sorted(chosen - {d[0] for d in DEFAULT_DOCS}):
+        wanted = [d for d in source if d[0].upper() in chosen]
+        for name in sorted(chosen - {d[0].upper() for d in source}):
             wanted.append((name, name.replace("_", " ").title(), ""))
 
     results = [
