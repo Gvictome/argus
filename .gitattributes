@@ -1,0 +1,2 @@
+# Shell scripts run on the Pi. CRLF makes bash fail with $'\r': command not found.
+*.sh text eol=lf
