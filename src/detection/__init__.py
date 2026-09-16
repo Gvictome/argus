@@ -208,6 +208,11 @@ class DetectionConfig:
     object_imgsz: int = 640
     # Motion detection differences a copy downscaled to this width.
     motion_width: int = 320
+    # Run YOLO only on frames where motion was seen. Cheap on a CPU-bound
+    # node, but it means a stationary subject is never classified: hold a
+    # parcel still in front of the camera and nothing is detected at all.
+    # FR-19 asks for every frame, which is what False gives.
+    motion_gate: bool = True
     # none | auto | pt | openvino | ncnn. Defaults to none so a bare
     # DetectionService() is unaffected by whatever sits in models/; the app
     # passes OBJECT_BACKEND through.
@@ -238,6 +243,10 @@ class DetectionService:
         self.backend = "none"         # "hailo" | "cpu" | "none"
         self._initialized = False
         self._frame_times: deque = deque(maxlen=FPS_WINDOW)
+        # How often the motion gate actually opens. Without this, "YOLO
+        # never ran" and "YOLO ran and found nothing" look identical.
+        self._frames_seen = 0
+        self._frames_with_motion = 0
 
     def initialize(self) -> bool:
         """
@@ -599,13 +608,18 @@ class DetectionService:
         """
         all_detections: List[Detection] = []
         self._frame_times.append(time.monotonic())
+        self._frames_seen += 1
 
         # Motion detection (fast, always runs)
         motion = self.detect_motion(frame)
         all_detections.extend(motion)
-
-        # Only run expensive models if motion is detected
         if motion:
+            self._frames_with_motion += 1
+
+        # Expensive models run on motion, or on every frame when the gate
+        # is off. A stationary subject produces no motion, so with the gate
+        # on it is never classified.
+        if motion or not self.config.motion_gate:
             objects = self.detect_objects(frame)
             all_detections.extend(objects)
 
@@ -679,6 +693,9 @@ class DetectionService:
             "face_recognition": self.face_recognizer is not None,
             "faces_enabled": self.config.faces_enabled,
             "model": self.config.model_name,
+            "motion_gate": self.config.motion_gate,
+            "motion_rate": (round(self._frames_with_motion / self._frames_seen, 3)
+                            if self._frames_seen else 0.0),
             "object_imgsz": self.config.object_imgsz,
             "threat_detection": self.threat_classifier is not None,
             "known_faces": known_faces,

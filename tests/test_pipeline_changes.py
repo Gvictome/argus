@@ -332,6 +332,64 @@ class TestHeadWeightIsolation:
                        zip(candidate.get_weights(), before))
 
 
+class TestMotionGate:
+    """A subject that holds still produces no motion, so YOLO never runs."""
+
+    class _CountingYOLO:
+        calls = 0
+
+        def __init__(self, path, **kwargs):
+            pass
+
+        def __call__(self, frame, **kwargs):
+            type(self).calls += 1
+            return []
+
+    def _service(self, monkeypatch, tmp_path, **config):
+        import src.detection as detection_module
+
+        self._CountingYOLO.calls = 0
+        monkeypatch.setattr(detection_module, "BASE_DIR", tmp_path)
+        monkeypatch.setattr(detection_module, "_ULTRALYTICS_AVAILABLE", True)
+        monkeypatch.setattr(detection_module, "_YOLO", self._CountingYOLO)
+        service = detection_module.DetectionService(
+            detection_module.DetectionConfig(**config))
+        service.initialize()
+        return service
+
+    def test_a_still_scene_never_reaches_yolo_with_the_gate_on(self, monkeypatch, tmp_path):
+        service = self._service(monkeypatch, tmp_path, motion_gate=True)
+
+        for _ in range(4):
+            service.process_frame(_frame(60, (240, 320, 3)))
+
+        assert self._CountingYOLO.calls == 0
+        assert service.status()["motion_rate"] == 0.0
+
+    def test_the_gate_off_classifies_every_frame(self, monkeypatch, tmp_path):
+        """FR-19: the detector runs on every frame, moving or not."""
+        service = self._service(monkeypatch, tmp_path, motion_gate=False)
+
+        for _ in range(4):
+            service.process_frame(_frame(60, (240, 320, 3)))
+
+        assert self._CountingYOLO.calls == 4
+        assert service.status()["motion_gate"] is False
+
+    def test_motion_rate_reports_how_often_the_gate_opens(self, monkeypatch, tmp_path):
+        service = self._service(monkeypatch, tmp_path, motion_gate=True)
+
+        service.process_frame(_frame(60, (240, 320, 3)))   # primes
+        moving = _frame(60, (240, 320, 3))
+        moving[40:180, 60:260] = 240
+        service.process_frame(moving)
+        service.process_frame(_frame(60, (240, 320, 3)))
+
+        status = service.status()
+        assert 0.0 < status["motion_rate"] < 1.0
+        assert self._CountingYOLO.calls >= 1
+
+
 class TestSnapshotWithWorkerRunning:
     """The worker owns the camera; a second read returns nothing."""
 

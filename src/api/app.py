@@ -123,6 +123,7 @@ def create_app() -> FastAPI:
             faces_enabled=settings.FACE_RECOGNITION_ENABLED,
             object_imgsz=settings.OBJECT_IMGSZ,
             motion_width=settings.MOTION_WIDTH,
+            motion_gate=settings.MOTION_GATE,
             cpu_export=settings.OBJECT_BACKEND,
             model_name=settings.OBJECT_MODEL,
         )

@@ -59,6 +59,9 @@ class Settings:
     OBJECT_BACKEND: str = "auto"
     # Width motion detection downscales to before differencing.
     MOTION_WIDTH: int = 320
+    # False runs YOLO on every frame (FR-19). True saves CPU but never
+    # classifies a subject that holds still.
+    MOTION_GATE: bool = True
     # Run detection continuously in the background (FR-19) rather than
     # only while a client holds the video stream open.
     DETECTION_AUTOSTART: bool = True
@@ -205,6 +208,7 @@ class Settings:
             OBJECT_MODEL=os.getenv("OBJECT_MODEL", "yolov8n"),
             OBJECT_BACKEND=os.getenv("OBJECT_BACKEND", "auto").lower(),
             MOTION_WIDTH=int(os.getenv("MOTION_WIDTH", 320)),
+            MOTION_GATE=os.getenv("MOTION_GATE", "true").lower() == "true",
             DETECTION_AUTOSTART=os.getenv("DETECTION_AUTOSTART", "true").lower() == "true",
             STREAM_MAX_FPS=float(os.getenv("STREAM_MAX_FPS", 15.0)),
             STREAM_WIDTH=int(os.getenv("STREAM_WIDTH", 960)),
