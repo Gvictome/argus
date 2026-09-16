@@ -341,6 +341,10 @@ class TestSnapshotWithWorkerRunning:
         def latest(self):
             return np.full((48, 64, 3), 120, dtype=np.uint8), [], 7
 
+        def stop(self):
+            """Application shutdown stops the worker; a stub must survive it."""
+            self.running = False
+
     def test_snapshot_serves_the_workers_frame(self):
         from fastapi.testclient import TestClient
 
@@ -366,6 +370,9 @@ class TestSnapshotWithWorkerRunning:
 
             def latest(self):
                 return None, [], 0
+
+            def stop(self):
+                self.running = False
 
         app = create_app()
         with TestClient(app) as client:
