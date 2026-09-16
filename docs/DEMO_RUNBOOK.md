@@ -207,6 +207,82 @@ running throughout.
 
 ---
 
+## C2 · A federated trial with nothing but the Pi
+
+The aggregator does not have to live on another machine. For a trial,
+run it on the node itself — three shells, all on the Pi.
+
+**Shell 2 — the aggregator:**
+
+```bash
+cd ~/argus && source .venv/bin/activate
+python sim/fl.py serve --rounds 3 --clients 1 --address 127.0.0.1:8080
+```
+
+**Shell 3 — seed, train, then join the round:**
+
+```bash
+cd ~/argus && source .venv/bin/activate
+curl -sX POST localhost:8000/api/federated/samples/bootstrap \
+     -H 'Content-Type: application/json' -d '{"site":"driveway","n":4000}'
+curl -sX POST localhost:8000/api/federated/head/train \
+     -H 'Content-Type: application/json' -d '{"epochs":6}'
+curl -sX POST localhost:8000/api/federated/round \
+     -H 'Content-Type: application/json' \
+     -d '{"server":"127.0.0.1:8080","epochs":4}'
+```
+
+Then watch the round and the node together:
+
+```bash
+curl -s localhost:8000/api/federated/round | python -m json.tool
+curl -s localhost:8000/api/detection/status | python -m json.tool
+```
+
+The round trains in its own process on one core, so `detect_fps` should
+barely move. `model_version` on `/api/status` becomes `fl-r1`, `fl-r2`
+and so on each time the gate accepts an update, and the built-in page
+shows it.
+
+---
+
+## C3 · Which YOLO to load
+
+`OBJECT_MODEL` selects the weights: `yolov8n` (default), `yolov8s`,
+`yolov8m`. Bigger is more accurate and slower, and an accelerated backend
+needs an export built at that name:
+
+```bash
+python scripts/export_cpu_models.py --format ncnn --model yolov8s
+OBJECT_MODEL=yolov8s python main.py
+```
+
+Without an export it falls back to plain PyTorch weights, downloading
+them on first use. Check what actually loaded:
+
+```bash
+curl -s localhost:8000/api/detection/status | python -m json.tool
+```
+
+`model` and `backend` report what is running. On the Pi's CPU, start at
+`yolov8n`; `yolov8s` is roughly 2–3× the work per frame. The measured
+ceiling on the Hailo is far higher — `yolov8m` ran at 76 FPS on the
+AI HAT+ 2 — but that needs the HEF compile.
+
+### The four classes
+
+| ARGUS class | What triggers it |
+|---|---|
+| person | person |
+| vehicle | bicycle, car, motorcycle, bus, train, truck |
+| animal | bird, cat, dog, horse, sheep, cow |
+| package | backpack, handbag, suitcase |
+
+COCO has no parcel class, so a doorstep delivery detects as one of the
+carried-item classes. Everything else COCO knows is dropped before NMS.
+
+---
+
 ## D · Configuration
 
 | Variable | Default | Purpose |

@@ -88,6 +88,7 @@ class TestDetectionStatus:
             "known_faces",
             "faces_enabled",
             "object_imgsz",
+            "model",
         }
         assert isinstance(data["fps"], (int, float))
         assert data["backend"] in {"hailo", "cpu", "none"}

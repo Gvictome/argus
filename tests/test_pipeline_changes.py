@@ -332,6 +332,99 @@ class TestHeadWeightIsolation:
                        zip(candidate.get_weights(), before))
 
 
+class TestArgusClassTaxonomy:
+    """person / vehicle / animal / package, and nothing landing in the wrong one."""
+
+    def test_a_bicycle_is_a_vehicle(self):
+        """Regression: COCO id 1 was mapped to ANIMAL."""
+        from src.detection import _YOLO_CLASS_MAP
+
+        assert _YOLO_CLASS_MAP[1] is DetectionType.VEHICLE
+
+    def test_carried_items_are_packages(self):
+        from src.detection import _YOLO_CLASS_MAP
+
+        for coco_id in (24, 26, 28):  # backpack, handbag, suitcase
+            assert _YOLO_CLASS_MAP[coco_id] is DetectionType.PACKAGE
+
+    def test_every_mapped_class_is_one_of_the_four(self):
+        from src.detection import _YOLO_CLASS_MAP
+
+        assert set(_YOLO_CLASS_MAP.values()) == {
+            DetectionType.HUMAN, DetectionType.VEHICLE,
+            DetectionType.ANIMAL, DetectionType.PACKAGE,
+        }
+
+    def test_the_class_filter_matches_the_map(self):
+        from src.detection import _RELEVANT_COCO_IDS, _YOLO_CLASS_MAP
+
+        assert _RELEVANT_COCO_IDS == sorted(_YOLO_CLASS_MAP)
+
+    def test_packages_reach_the_federated_head(self):
+        from src.federated.features import class_index
+
+        assert class_index("package") == 3
+        assert class_index("vehicle") == 1
+
+    def test_a_delivery_is_worth_recording(self):
+        from src.detection.event_recorder import DEFAULT_TRIGGERS
+
+        assert DetectionType.PACKAGE in DEFAULT_TRIGGERS
+
+
+class TestModelSelection:
+    def test_export_folder_follows_the_model_name(self):
+        from src.detection import cpu_export_dir
+
+        assert cpu_export_dir("ncnn", "yolov8s") == "yolov8s_ncnn_model"
+        assert cpu_export_dir("openvino", "yolov8n") == "yolov8n_openvino_model"
+
+    def test_a_bigger_model_loads_its_own_export(self, tmp_path, monkeypatch):
+        import src.detection as detection_module
+
+        export = tmp_path / "models" / "yolov8s_ncnn_model"
+        export.mkdir(parents=True)
+        (export / "metadata.yaml").write_text("task: detect\nimgsz:\n- 640\n- 640\n")
+
+        loaded = {}
+
+        class _YOLO:
+            def __init__(self, path, **kwargs):
+                loaded["path"] = str(path)
+
+        monkeypatch.setattr(detection_module, "BASE_DIR", tmp_path)
+        monkeypatch.setattr(detection_module, "_ULTRALYTICS_AVAILABLE", True)
+        monkeypatch.setattr(detection_module, "_YOLO", _YOLO)
+
+        service = detection_module.DetectionService(
+            detection_module.DetectionConfig(model_name="yolov8s", cpu_export="auto"))
+        service.initialize()
+
+        assert service.backend == "cpu-ncnn"
+        assert "yolov8s_ncnn_model" in loaded["path"]
+        assert service.status()["model"] == "yolov8s"
+
+    def test_without_an_export_it_loads_the_named_weights(self, tmp_path, monkeypatch):
+        import src.detection as detection_module
+
+        loaded = {}
+
+        class _YOLO:
+            def __init__(self, path, **kwargs):
+                loaded["path"] = str(path)
+
+        monkeypatch.setattr(detection_module, "BASE_DIR", tmp_path)
+        monkeypatch.setattr(detection_module, "_ULTRALYTICS_AVAILABLE", True)
+        monkeypatch.setattr(detection_module, "_YOLO", _YOLO)
+
+        service = detection_module.DetectionService(
+            detection_module.DetectionConfig(model_name="yolov8m", cpu_export="auto"))
+        service.initialize()
+
+        assert service.backend == "cpu"
+        assert loaded["path"] == "yolov8m.pt"
+
+
 class TestSnapshotsAndClips:
     """Every stored event keeps a still; every clip lands in the events table."""
 

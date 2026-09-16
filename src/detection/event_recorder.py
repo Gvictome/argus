@@ -44,6 +44,9 @@ DEFAULT_TRIGGERS = frozenset({
     DetectionType.DANGEROUS_PERSON,
     DetectionType.FACE,
     DetectionType.VEHICLE,
+    # A parcel left at the door is exactly the footage someone asks for
+    # later, and it is the one event with no person still in frame.
+    DetectionType.PACKAGE,
 })
 
 

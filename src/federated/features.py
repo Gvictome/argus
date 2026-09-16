@@ -46,9 +46,9 @@ LABEL_NAMES = (
 )
 ANOMALY = 4
 
-# COCO ids that stand in for "package". COCO has no package class, and
-# DetectionType has no PACKAGE member either, so these are matched before
-# falling back to the DetectionType map in src/detection/__init__.py.
+# COCO ids that stand in for "package": COCO has no parcel class. These
+# are checked before the DetectionType map so a package still resolves
+# when a detection carries only its raw COCO id.
 _PACKAGE_COCO_IDS = frozenset({24, 26, 28})  # backpack, handbag, suitcase
 
 _DETECTION_TYPE_TO_CLASS = {
@@ -57,6 +57,7 @@ _DETECTION_TYPE_TO_CLASS = {
     "dangerous_person": 0,
     "vehicle": 1,
     "animal": 2,
+    "package": 3,
 }
 
 

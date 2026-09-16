@@ -48,6 +48,9 @@ class Settings:
     # YOLO input size. 640 matches the export; lower trades small-object
     # recall for speed on a CPU backend.
     OBJECT_IMGSZ: int = 640
+    # Which YOLO weights to run: yolov8n (fastest), yolov8s, yolov8m.
+    # An accelerated backend needs an export built at the same name.
+    OBJECT_MODEL: str = "yolov8n"
     # Object-model backend: auto | pt | openvino | ncnn. auto uses an
     # optimised CPU export from models/ when one is present.
     OBJECT_BACKEND: str = "auto"
@@ -195,6 +198,7 @@ class Settings:
             MOTION_SENSITIVITY=int(os.getenv("MOTION_SENSITIVITY", 25)),
             DETECTION_THRESHOLD=float(os.getenv("DETECTION_THRESHOLD", 0.5)),
             OBJECT_IMGSZ=int(os.getenv("OBJECT_IMGSZ", 640)),
+            OBJECT_MODEL=os.getenv("OBJECT_MODEL", "yolov8n"),
             OBJECT_BACKEND=os.getenv("OBJECT_BACKEND", "auto").lower(),
             MOTION_WIDTH=int(os.getenv("MOTION_WIDTH", 320)),
             DETECTION_AUTOSTART=os.getenv("DETECTION_AUTOSTART", "true").lower() == "true",

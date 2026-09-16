@@ -26,21 +26,26 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
-from src.detection import _CPU_EXPORTS  # noqa: E402
+from src.config import settings  # noqa: E402
+from src.detection import _CPU_EXPORTS, cpu_export_dir  # noqa: E402
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--format", choices=sorted(_CPU_EXPORTS), required=True)
-    ap.add_argument("--weights", default=str(REPO / "yolov8n.pt"))
+    ap.add_argument("--model", default=settings.OBJECT_MODEL,
+                    help="yolov8n (default), yolov8s, yolov8m")
+    ap.add_argument("--weights", default="",
+                    help="weights file; defaults to <model>.pt, downloaded if absent")
     ap.add_argument("--imgsz", type=int, default=640)
     args = ap.parse_args()
+    weights = args.weights or str(REPO / f"{args.model}.pt")
 
     from ultralytics import YOLO
 
-    target = REPO / "models" / _CPU_EXPORTS[args.format]
+    target = REPO / "models" / cpu_export_dir(args.format, args.model)
     t0 = time.time()
-    exported = Path(YOLO(args.weights).export(format=args.format, imgsz=args.imgsz))
+    exported = Path(YOLO(weights).export(format=args.format, imgsz=args.imgsz))
 
     # Ultralytics writes the export beside the weights; move it to models/.
     if exported.resolve() != target.resolve():
@@ -50,7 +55,8 @@ def main() -> int:
         shutil.move(str(exported), str(target))
 
     print(f"{args.format} export ready at {target} ({time.time() - t0:.0f}s)")
-    print("DetectionService will use it on next start (OBJECT_BACKEND=auto).")
+    print(f"Run the node with OBJECT_MODEL={args.model} to use it "
+          f"(OBJECT_BACKEND=auto).")
     return 0
 
 

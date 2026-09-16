@@ -123,6 +123,7 @@ def create_app() -> FastAPI:
             object_imgsz=settings.OBJECT_IMGSZ,
             motion_width=settings.MOTION_WIDTH,
             cpu_export=settings.OBJECT_BACKEND,
+            model_name=settings.OBJECT_MODEL,
         )
         detection_service.initialize()
         app.state.detection_service = detection_service

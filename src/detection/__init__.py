@@ -39,6 +39,7 @@ class DetectionType(Enum):
     FACE = "face"
     ANIMAL = "animal"
     VEHICLE = "vehicle"
+    PACKAGE = "package"
     UNKNOWN = "unknown"
     # Produced only by the threat stage, never by the COCO object model.
     DANGEROUS_PERSON = "dangerous_person"
@@ -50,18 +51,31 @@ class DetectionType(Enum):
 # class 1 means "dangerous person", not "bicycle" -- routing its output
 # through this map would render every threat as a green ANIMAL box. It
 # has its own mapping in src/detection/threat.py.
+# The four ARGUS classes are person, vehicle, animal and package, so every
+# COCO id worth keeping resolves to one of them.
 _YOLO_CLASS_MAP: dict[int, DetectionType] = {
     0: DetectionType.HUMAN,     # person
-    1: DetectionType.ANIMAL,    # bicycle (treat as unknown via fallback)
+    # A bicycle is a vehicle. It was mapped to ANIMAL, with a comment
+    # claiming it fell back to unknown -- it did not, so every bike that
+    # passed the camera was recorded, drawn and trained on as an animal.
+    1: DetectionType.VEHICLE,   # bicycle
     2: DetectionType.VEHICLE,   # car
     3: DetectionType.VEHICLE,   # motorcycle
     5: DetectionType.VEHICLE,   # bus
+    6: DetectionType.VEHICLE,   # train
     7: DetectionType.VEHICLE,   # truck
+    14: DetectionType.ANIMAL,   # bird
     15: DetectionType.ANIMAL,   # cat
     16: DetectionType.ANIMAL,   # dog
     17: DetectionType.ANIMAL,   # horse
     18: DetectionType.ANIMAL,   # sheep
     19: DetectionType.ANIMAL,   # cow
+    # COCO has no parcel class. These are what a doorstep delivery
+    # actually detects as, and without them a package is typed UNKNOWN:
+    # no clip recorded, no class on the dashboard, nothing to train on.
+    24: DetectionType.PACKAGE,  # backpack
+    26: DetectionType.PACKAGE,  # handbag
+    28: DetectionType.PACKAGE,  # suitcase
 }
 
 
@@ -84,21 +98,25 @@ _HAILO_CANDIDATES = (
 )
 
 
-# Everything ARGUS maps to a class, plus the COCO ids that stand in for
-# "package". Passing these to the model drops the other COCO classes
-# before NMS instead of after.
-_RELEVANT_COCO_IDS = sorted(set(_YOLO_CLASS_MAP) | {24, 26, 28})
+# Everything ARGUS maps to a class. Passing these to the model drops the
+# other COCO classes before NMS instead of after.
+_RELEVANT_COCO_IDS = sorted(_YOLO_CLASS_MAP)
 
 # Optimised CPU exports. NCNN is the Ultralytics-recommended CPU path on a
 # Raspberry Pi; OpenVINO is the fast path on x86. Both are what to run
 # while no Hailo HEF has been compiled for the board.
 _CPU_EXPORTS = {
-    "openvino": "yolov8n_openvino_model",
-    "ncnn": "yolov8n_ncnn_model",
+    "openvino": "{model}_openvino_model",
+    "ncnn": "{model}_ncnn_model",
 }
 
 
-def _find_cpu_export(preference: str):
+def cpu_export_dir(fmt: str, model: str) -> str:
+    """Folder name Ultralytics gives an export of `model` in `fmt`."""
+    return _CPU_EXPORTS[fmt].format(model=model)
+
+
+def _find_cpu_export(preference: str, model: str = "yolov8n"):
     """(format, path) of an optimised CPU export to load, or None."""
     import platform
 
@@ -113,7 +131,7 @@ def _find_cpu_export(preference: str):
     else:
         return None
     for fmt in order:
-        path = BASE_DIR / "models" / _CPU_EXPORTS[fmt]
+        path = BASE_DIR / "models" / cpu_export_dir(fmt, model)
         if path.exists():
             return fmt, path
     return None
@@ -194,6 +212,10 @@ class DetectionConfig:
     # DetectionService() is unaffected by whatever sits in models/; the app
     # passes OBJECT_BACKEND through.
     cpu_export: str = "none"
+    # Which YOLO to load: yolov8n, yolov8s, yolov8m... Bigger is more
+    # accurate and slower, and must be exported at that name to be used
+    # by an accelerated backend.
+    model_name: str = "yolov8n"
 
 
 class DetectionService:
@@ -234,9 +256,10 @@ class DetectionService:
                 # query: an engine only exists if someone exported it for
                 # this machine, and a TensorRT engine is not portable
                 # between devices or JetPack versions anyway.
-                tensorrt_model = BASE_DIR / "models" / "yolov8n.engine"
+                model_name = self.config.model_name
+                tensorrt_model = BASE_DIR / "models" / f"{model_name}.engine"
                 hailo_model = _find_hailo_model()
-                cpu_export = _find_cpu_export(self.config.cpu_export)
+                cpu_export = _find_cpu_export(self.config.cpu_export, model_name)
 
                 if tensorrt_model.exists():
                     logger.info("TensorRT engine found — using Jetson GPU acceleration.")
@@ -253,8 +276,8 @@ class DetectionService:
                     self.object_model = _YOLO(str(path), task="detect")
                     self.backend = f"cpu-{fmt}"
                 else:
-                    logger.info("No accelerator model found. Using standard YOLOv8n (CPU).")
-                    self.object_model = _YOLO("yolov8n.pt")
+                    logger.info("No accelerator model found. Using %s on CPU.", model_name)
+                    self.object_model = _YOLO(f"{model_name}.pt")
                     self.backend = "cpu"
 
                 if self.backend == "hailo" or self.backend.startswith("cpu-"):
@@ -655,6 +678,7 @@ class DetectionService:
             "object_detection": self.object_model is not None,
             "face_recognition": self.face_recognizer is not None,
             "faces_enabled": self.config.faces_enabled,
+            "model": self.config.model_name,
             "object_imgsz": self.config.object_imgsz,
             "threat_detection": self.threat_classifier is not None,
             "known_faces": known_faces,
