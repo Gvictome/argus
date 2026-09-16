@@ -370,7 +370,7 @@ class _HumanYOLO:
     def __init__(self, path):
         _HumanYOLO.last_path = str(path)
 
-    def __call__(self, frame, verbose=False):
+    def __call__(self, frame, verbose=False, **kwargs):
         class _B:
             conf = [0.9]
             cls = [0]
@@ -384,7 +384,7 @@ class _HumanYOLO:
 
 
 class _EmptyYOLO(_HumanYOLO):
-    def __call__(self, frame, verbose=False):
+    def __call__(self, frame, verbose=False, **kwargs):
         return []
 
 

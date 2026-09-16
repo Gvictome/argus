@@ -1,0 +1,6 @@
+# DEPRECATED optional stage. See requirements.txt.
+# Face recognition (ArcFace / buffalo_l via InsightFace).
+# Imported lazily: src/detection/face_recognition.py degrades to Haar-cascade
+# detection without identity if these are absent, so the API still starts.
+insightface>=0.7.3
+onnxruntime>=1.17.0

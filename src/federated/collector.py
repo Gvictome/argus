@@ -52,7 +52,9 @@ class EventCollector:
 
     def __init__(self, store, db=None, iou_threshold: float = 0.3,
                  max_idle_s: float = 2.0, min_frames: int = 3,
-                 source: str = "camera", reach_factor: float = 2.5):
+                 source: str = "camera", reach_factor: float = 2.5,
+                 motion_min_area: float = 0.002, motion_min_s: float = 1.0,
+                 motion_max_s: float = 60.0):
         self.store = store
         self.db = db
         self.iou_threshold = iou_threshold
@@ -65,6 +67,17 @@ class EventCollector:
         self._next_id = 1
         self.emitted = 0
         self.dropped_short = 0
+        # Motion with no classified object is still worth a record -- it is
+        # how a person YOLO missed shows up at all. Sustained motion over a
+        # minimum area becomes one "motion" event; flicker does not.
+        self.motion_min_area = motion_min_area
+        self.motion_min_s = motion_min_s
+        # A scene that never goes still -- a busy street, this demo's
+        # pedestrian video -- would hold one segment open forever and log
+        # nothing. Long motion is cut into chunks of at most this length.
+        self.motion_max_s = motion_max_s
+        self._motion: Optional[dict] = None
+        self.motion_events = 0
 
     # ------------------------------------------------------------------
     def observe(self, detections: Sequence, frame_shape: Tuple[int, int],
@@ -74,6 +87,8 @@ class EventCollector:
         h, w = frame_shape[0], frame_shape[1]
         if not h or not w:
             return []
+
+        self._track_motion(detections, w, h, now)
 
         touched: List[int] = []
         used: set = set()
@@ -133,6 +148,7 @@ class EventCollector:
 
     def flush(self) -> int:
         """Close every open track. Call at shutdown or end of a capture."""
+        self._close_motion()
         n = 0
         for tid in list(self._tracks):
             if self._emit(tid):
@@ -140,6 +156,51 @@ class EventCollector:
         return n
 
     # ------------------------------------------------------------------
+    def _track_motion(self, detections, w: int, h: int, now: float) -> None:
+        area = 0.0
+        for det in detections:
+            kind = getattr(getattr(det, "type", None), "value", getattr(det, "type", ""))
+            if str(kind).lower() == "motion":
+                _, _, bw, bh = det.bbox
+                area += (bw * bh) / float(w * h)
+        area = min(area, 1.0)
+
+        seg = self._motion
+        if area >= self.motion_min_area:
+            if seg is None:
+                self._motion = {"start": now, "last": now, "frames": 1, "peak": area}
+            else:
+                seg["last"] = now
+                seg["frames"] += 1
+                seg["peak"] = max(seg["peak"], area)
+                if now - seg["start"] >= self.motion_max_s:
+                    self._close_motion()
+        elif seg is not None and now - seg["last"] > self.max_idle_s:
+            self._close_motion()
+
+    def _close_motion(self) -> None:
+        seg, self._motion = self._motion, None
+        if seg is None:
+            return
+        duration = seg["last"] - seg["start"]
+        if seg["frames"] < self.min_frames or duration < self.motion_min_s:
+            return
+        self.motion_events += 1
+        if self.db is not None:
+            try:
+                self.db.log_event(
+                    event_id=str(uuid.uuid4()),
+                    event_type="motion",
+                    source=self.source,
+                    data=json.dumps({
+                        "duration_s": round(duration, 2),
+                        "frames": seg["frames"],
+                        "peak_area": round(seg["peak"], 4),
+                    }),
+                )
+            except Exception as exc:
+                logger.warning("collector: motion log_event failed: %s", exc)
+
     def _close_stale(self, now: float) -> None:
         for tid, t in list(self._tracks.items()):
             if now - t.last_seen > self.max_idle_s:
@@ -197,6 +258,8 @@ class EventCollector:
             "emitted": self.emitted,
             "dropped_short": self.dropped_short,
             "min_frames": self.min_frames,
+            "motion_events": self.motion_events,
+            "motion_open": self._motion is not None,
             "reach_factor": self.reach_factor,
             "max_idle_s": self.max_idle_s,
         }

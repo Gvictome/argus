@@ -147,6 +147,23 @@ async def camera_stream(request: Request, detect_every: int = 3, quality: int = 
     from src.detection import detection_service
     from src.detection.stream import stream_annotated_mjpeg
 
+    # With the background worker running, the stream only draws and encodes
+    # what the worker already detected. It never runs the model itself, so
+    # a viewer costs no detection time and detection does not need one.
+    worker = getattr(request.app.state, "detection_worker", None)
+    if worker is not None and worker.running:
+        from src.config import settings
+        from src.detection.worker import stream_from_worker
+        return StreamingResponse(
+            stream_from_worker(
+                worker,
+                jpeg_quality=quality,
+                max_fps=settings.STREAM_MAX_FPS,
+                stream_width=settings.STREAM_WIDTH,
+            ),
+            media_type="multipart/x-mixed-replace; boundary=frame",
+        )
+
     if not camera_service.is_initialized:
         raise HTTPException(status_code=503, detail="Camera not initialized. Call /api/camera/init first")
 
@@ -351,10 +368,17 @@ async def federated_status(request: Request):
 # ============================================================================
 
 @router.get("/api/detection/status", tags=["Detection"])
-async def detection_status():
-    """Get detection service status: FPS, backend, and which models are live."""
+async def detection_status(request: Request):
+    """Detection status: backend, which stages are live, and real throughput."""
     from src.detection import detection_service
-    return detection_service.status()
+    status = detection_service.status()
+    worker = getattr(request.app.state, "detection_worker", None)
+    if worker is not None:
+        status["worker"] = worker.status()
+    collector = getattr(request.app.state, "fl_collector", None)
+    if collector is not None:
+        status["collector"] = collector.status()
+    return status
 
 
 @router.get("/api/faces", tags=["Detection"], dependencies=_PROTECTED)

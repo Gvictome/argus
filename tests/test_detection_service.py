@@ -40,7 +40,7 @@ class _FakeYOLO:
     def __init__(self, path):
         _FakeYOLO.last_path = str(path)
 
-    def __call__(self, frame, verbose=False):
+    def __call__(self, frame, verbose=False, **kwargs):
         return []
 
 
@@ -99,7 +99,7 @@ class _FakeMatch:
 class _HumanYOLO(_FakeYOLO):
     """A YOLO stand-in that reports one person filling the frame."""
 
-    def __call__(self, frame, verbose=False):
+    def __call__(self, frame, verbose=False, **kwargs):
         class _Box:
             conf = [0.9]
             cls = [0]
@@ -122,7 +122,7 @@ class TestCascadeFallback:
         or the Hailo model fails to load, that turns the headline feature off
         with no visible error. Motion alone must be enough to reach faces.
         """
-        service = DetectionService()
+        service = DetectionService(detection_module.DetectionConfig(faces_enabled=True))
         service.object_model = None
         recognizer = _FakeRecognizer([_FakeMatch(face_id="f1", name="Giovanny", confidence=0.8)])
         service.attach_face_recognizer(recognizer)
@@ -139,7 +139,7 @@ class TestCascadeFallback:
         The fallback must not become an unconditional bypass. When YOLO is
         working and reports nobody, the expensive ArcFace pass stays skipped.
         """
-        service = DetectionService()
+        service = DetectionService(detection_module.DetectionConfig(faces_enabled=True))
         service.initialize()
         recognizer = _FakeRecognizer()
         service.attach_face_recognizer(recognizer)
@@ -154,7 +154,7 @@ class TestCascadeFallback:
         monkeypatch.setattr(detection_module, "_ULTRALYTICS_AVAILABLE", True)
         monkeypatch.setattr(detection_module, "_YOLO", _HumanYOLO)
 
-        service = DetectionService()
+        service = DetectionService(detection_module.DetectionConfig(faces_enabled=True))
         service.initialize()
         recognizer = _FakeRecognizer([_FakeMatch()])
         service.attach_face_recognizer(recognizer)

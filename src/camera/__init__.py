@@ -57,6 +57,10 @@ class CameraConfig:
     sensor_id: int = 0
     # Human label for the dashboard ("Front door", "Back gate").
     name: str = "camera0"
+    # Video file path or capture index that overrides the board camera.
+    source: str = ""
+    # Pace a file source to its own frame rate, like a live camera.
+    realtime: bool = True
 
 
 class CameraService:

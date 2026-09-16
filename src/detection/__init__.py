@@ -11,6 +11,7 @@ Handles:
 import logging
 import time
 from collections import deque
+from pathlib import Path
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional, List, Tuple
@@ -83,6 +84,70 @@ _HAILO_CANDIDATES = (
 )
 
 
+# Everything ARGUS maps to a class, plus the COCO ids that stand in for
+# "package". Passing these to the model drops the other COCO classes
+# before NMS instead of after.
+_RELEVANT_COCO_IDS = sorted(set(_YOLO_CLASS_MAP) | {24, 26, 28})
+
+# Optimised CPU exports. NCNN is the Ultralytics-recommended CPU path on a
+# Raspberry Pi; OpenVINO is the fast path on x86. Both are what to run
+# while no Hailo HEF has been compiled for the board.
+_CPU_EXPORTS = {
+    "openvino": "yolov8n_openvino_model",
+    "ncnn": "yolov8n_ncnn_model",
+}
+
+
+def _find_cpu_export(preference: str):
+    """(format, path) of an optimised CPU export to load, or None."""
+    import platform
+
+    preference = (preference or "none").lower()
+    if preference in ("none", "pt"):
+        return None
+    if preference == "auto":
+        arm = platform.machine().lower() in ("aarch64", "arm64")
+        order = ["ncnn", "openvino"] if arm else ["openvino", "ncnn"]
+    elif preference in _CPU_EXPORTS:
+        order = [preference]
+    else:
+        return None
+    for fmt in order:
+        path = BASE_DIR / "models" / _CPU_EXPORTS[fmt]
+        if path.exists():
+            return fmt, path
+    return None
+
+
+def _export_imgsz(path) -> Optional[int]:
+    """Input size an exported model was compiled for, from its metadata.yaml.
+
+    NCNN, OpenVINO, and Hailo exports have a fixed input shape. Asking one
+    for a different size does not resize -- it returns no detections at all,
+    quickly, which reads as a large speedup with detection silently off.
+    Measured: OpenVINO exported at 640 and run at 416 gave 211 FPS and zero
+    boxes. So the export's own size wins over OBJECT_IMGSZ.
+    """
+    if path is None:
+        return None
+    p = Path(path)
+    meta = (p if p.is_dir() else p.parent) / "metadata.yaml"
+    if not meta.exists():
+        return None
+    try:
+        import yaml
+
+        imgsz = (yaml.safe_load(meta.read_text(encoding="utf-8")) or {}).get("imgsz")
+    except Exception:
+        return None
+    if isinstance(imgsz, (list, tuple)) and imgsz:
+        imgsz = imgsz[0]
+    try:
+        return int(imgsz)
+    except (TypeError, ValueError):
+        return None
+
+
 def _find_hailo_model():
     """The first Hailo export present, or None."""
     for parts in _HAILO_CANDIDATES:
@@ -100,6 +165,9 @@ class Detection:
     bbox: Tuple[int, int, int, int]  # x, y, width, height
     label: Optional[str] = None
     face_id: Optional[str] = None
+    # Raw COCO class id. "package" has no DetectionType, so the federated
+    # head recognises it by id.
+    coco_id: Optional[int] = None
 
 
 # Frames retained for the rolling FPS average. Short enough that the number
@@ -114,6 +182,18 @@ class DetectionConfig:
     detection_threshold: float = 0.5
     face_recognition_threshold: float = 0.6
     min_detection_size: Tuple[int, int] = (30, 30)
+    # DEPRECATED 2026-09-14. Face recognition cost more than YOLO on CPU and
+    # identity is out of scope. The stage stays behind this flag so it can
+    # be re-enabled; by default it never runs and nothing loads for it.
+    faces_enabled: bool = False
+    # YOLO input size.
+    object_imgsz: int = 640
+    # Motion detection differences a copy downscaled to this width.
+    motion_width: int = 320
+    # none | auto | pt | openvino | ncnn. Defaults to none so a bare
+    # DetectionService() is unaffected by whatever sits in models/; the app
+    # passes OBJECT_BACKEND through.
+    cpu_export: str = "none"
 
 
 class DetectionService:
@@ -156,6 +236,7 @@ class DetectionService:
                 # between devices or JetPack versions anyway.
                 tensorrt_model = BASE_DIR / "models" / "yolov8n.engine"
                 hailo_model = _find_hailo_model()
+                cpu_export = _find_cpu_export(self.config.cpu_export)
 
                 if tensorrt_model.exists():
                     logger.info("TensorRT engine found — using Jetson GPU acceleration.")
@@ -166,10 +247,26 @@ class DetectionService:
                                 hailo_model)
                     self.object_model = _YOLO(str(hailo_model))
                     self.backend = "hailo"
+                elif cpu_export is not None:
+                    fmt, path = cpu_export
+                    logger.info("%s export found at %s, using optimised CPU inference.", fmt, path)
+                    self.object_model = _YOLO(str(path), task="detect")
+                    self.backend = f"cpu-{fmt}"
                 else:
                     logger.info("No accelerator model found. Using standard YOLOv8n (CPU).")
                     self.object_model = _YOLO("yolov8n.pt")
                     self.backend = "cpu"
+
+                if self.backend == "hailo" or self.backend.startswith("cpu-"):
+                    export_path = hailo_model if self.backend == "hailo" else cpu_export[1]
+                    fixed = _export_imgsz(export_path)
+                    if fixed and fixed != self.config.object_imgsz:
+                        logger.warning(
+                            "OBJECT_IMGSZ=%d ignored: %s export is fixed at %d. "
+                            "Re-export at the size you want instead.",
+                            self.config.object_imgsz, self.backend, fixed,
+                        )
+                        self.config.object_imgsz = fixed
 
                 logger.info("YOLO model loaded successfully")
             except Exception as exc:
@@ -183,18 +280,21 @@ class DetectionService:
         else:
             logger.info("Skipping YOLOv8.1 — ultralytics not available")
 
-        # Face detection — OpenCV Haar cascade (bundled with cv2)
-        try:
-            cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-            self.face_cascade = cv2.CascadeClassifier(cascade_path)
-            if self.face_cascade.empty():
-                logger.warning("Failed to load Haar cascade for face detection")
+        # Face detection is deprecated; the cascade loads only when enabled.
+        if self.config.faces_enabled:
+            try:
+                cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+                self.face_cascade = cv2.CascadeClassifier(cascade_path)
+                if self.face_cascade.empty():
+                    logger.warning("Failed to load Haar cascade for face detection")
+                    self.face_cascade = None
+                else:
+                    logger.info("OpenCV face cascade loaded")
+            except Exception as exc:
+                logger.warning("Face cascade init failed: %s", exc)
                 self.face_cascade = None
-            else:
-                logger.info("OpenCV face cascade loaded")
-        except Exception as exc:
-            logger.warning("Face cascade init failed: %s", exc)
-            self.face_cascade = None
+        else:
+            logger.info("Face stage disabled (deprecated)")
 
         self._initialized = True
 
@@ -220,56 +320,57 @@ class DetectionService:
         """
         detections: List[Detection] = []
 
-        if self.previous_frame is None:
-            self.previous_frame = frame.copy()
+        # Differencing does not need full resolution to see a person move,
+        # and blurring two full frames per call was the most expensive
+        # "cheap" stage. Work on a small copy, keep this call's blurred
+        # result for the next call instead of re-blurring the previous
+        # frame, and map boxes back to full-resolution coordinates.
+        h, w = frame.shape[:2]
+        scale = min(1.0, max(16, int(self.config.motion_width or w)) / float(w))
+        small = frame if scale >= 1.0 else cv2.resize(
+            frame, (max(1, int(w * scale)), max(1, int(h * scale))),
+            interpolation=cv2.INTER_AREA,
+        )
+        gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+        k = max(3, int(round(21 * scale)) | 1)
+        gray = cv2.GaussianBlur(gray, (k, k), 0)
+
+        previous = self.previous_frame
+        self.previous_frame = gray
+        if previous is None or previous.shape != gray.shape:
             return detections
 
-        min_w, min_h = self.config.min_detection_size
-
-        # Convert both frames to grayscale
-        gray_current = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        gray_previous = cv2.cvtColor(self.previous_frame, cv2.COLOR_BGR2GRAY)
-
-        # Reduce noise before differencing
-        gray_current = cv2.GaussianBlur(gray_current, (21, 21), 0)
-        gray_previous = cv2.GaussianBlur(gray_previous, (21, 21), 0)
-
-        # Frame difference
-        diff = cv2.absdiff(gray_previous, gray_current)
-
-        # Binary threshold
+        diff = cv2.absdiff(previous, gray)
         _, thresh = cv2.threshold(
             diff, self.config.motion_threshold, 255, cv2.THRESH_BINARY
         )
-
-        # Dilate to fill gaps between contours
-        thresh = cv2.dilate(thresh, None, iterations=2)
-
-        # Find contours of changed regions
+        thresh = cv2.dilate(thresh, None, iterations=2 if scale >= 1.0 else 1)
         contours, _ = cv2.findContours(
             thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
         )
 
+        inv = 1.0 / scale
+        min_w, min_h = self.config.min_detection_size
         for contour in contours:
-            x, y, w, h = cv2.boundingRect(contour)
-            if w < min_w or h < min_h:
+            x, y, bw, bh = cv2.boundingRect(contour)
+            fx, fy, fw, fh = int(x * inv), int(y * inv), int(bw * inv), int(bh * inv)
+            if fw < min_w or fh < min_h:
                 continue
 
             # Confidence proxy: ratio of contour area to bounding-box area
             contour_area = cv2.contourArea(contour)
-            bbox_area = float(w * h) if w * h > 0 else 1.0
+            bbox_area = float(bw * bh) if bw * bh > 0 else 1.0
             confidence = min(contour_area / bbox_area, 1.0)
 
             detections.append(
                 Detection(
                     type=DetectionType.MOTION,
                     confidence=float(confidence),
-                    bbox=(x, y, w, h),
+                    bbox=(fx, fy, fw, fh),
                     label="motion",
                 )
             )
 
-        self.previous_frame = frame.copy()
         return detections
 
     def detect_objects(self, frame: np.ndarray) -> List[Detection]:
@@ -288,7 +389,13 @@ class DetectionService:
             return detections
 
         try:
-            results = self.object_model(frame, verbose=False)
+            results = self.object_model(
+                frame,
+                verbose=False,
+                imgsz=self.config.object_imgsz,
+                conf=self.config.detection_threshold,
+                classes=_RELEVANT_COCO_IDS,
+            )
         except Exception as exc:
             logger.error("YOLOv8n inference error: %s", exc)
             return detections
@@ -316,6 +423,7 @@ class DetectionService:
                         confidence=confidence,
                         bbox=(x, y, int(w), int(h)),
                         label=label,
+                        coco_id=cls_id,
                     )
                 )
 
@@ -483,10 +591,11 @@ class DetectionService:
             # unavailable there are no human detections to gate on, and that
             # gate would disable face recognition entirely -- so motion alone
             # becomes sufficient.
-            humans = [d for d in objects if d.type == DetectionType.HUMAN]
-            if humans or self.object_model is None:
-                faces = self.recognize_faces(frame)
-                all_detections.extend(faces)
+            if self.config.faces_enabled:
+                humans = [d for d in objects if d.type == DetectionType.HUMAN]
+                if humans or self.object_model is None:
+                    faces = self.recognize_faces(frame)
+                    all_detections.extend(faces)
 
             # Threat detection locates people itself, so it runs on motion
             # alone rather than behind a COCO human box. Gating it on one
@@ -545,6 +654,8 @@ class DetectionService:
             "motion_detection": self._initialized,
             "object_detection": self.object_model is not None,
             "face_recognition": self.face_recognizer is not None,
+            "faces_enabled": self.config.faces_enabled,
+            "object_imgsz": self.config.object_imgsz,
             "threat_detection": self.threat_classifier is not None,
             "known_faces": known_faces,
         }

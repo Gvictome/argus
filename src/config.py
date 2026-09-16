@@ -34,10 +34,34 @@ class Settings:
     CAMERA_RESOLUTION: tuple = (1920, 1080)
     CAMERA_FPS: int = 30
     CAMERA_ROTATION: int = 0
+    # A video file (or a numeric capture index) to use instead of the
+    # board's camera. Lets the whole pipeline run against a recording on a
+    # dev machine, and makes benchmarks repeatable.
+    CAMERA_SOURCE: str = ""
+    # Pace a file source to its native frame rate, as a live camera would.
+    # False reads as fast as the pipeline can consume, for benchmarking.
+    CAMERA_SOURCE_REALTIME: bool = True
 
     # Detection
     MOTION_SENSITIVITY: int = 25
     DETECTION_THRESHOLD: float = 0.5
+    # YOLO input size. 640 matches the export; lower trades small-object
+    # recall for speed on a CPU backend.
+    OBJECT_IMGSZ: int = 640
+    # Object-model backend: auto | pt | openvino | ncnn. auto uses an
+    # optimised CPU export from models/ when one is present.
+    OBJECT_BACKEND: str = "auto"
+    # Width motion detection downscales to before differencing.
+    MOTION_WIDTH: int = 320
+    # Run detection continuously in the background (FR-19) rather than
+    # only while a client holds the video stream open.
+    DETECTION_AUTOSTART: bool = True
+    # Viewer stream: capped rate and downscaled encode width.
+    STREAM_MAX_FPS: float = 15.0
+    STREAM_WIDTH: int = 960
+    # DEPRECATED 2026-09-14. Face recognition cost more than YOLO on CPU
+    # and identity is out of scope. Off by default; nothing loads for it.
+    FACE_RECOGNITION_ENABLED: bool = False
     # Haar-cascade face *detection* confidence placeholder (no identity).
     FACE_RECOGNITION_THRESHOLD: float = 0.6
     # ArcFace cosine-similarity threshold for face *identity* matching.
@@ -152,14 +176,31 @@ class Settings:
     @classmethod
     def from_env(cls) -> "Settings":
         """Load settings from environment variables"""
+        # ARGUS_DATA_DIR relocates the database, sample store, and FL state
+        # together -- e.g. data/mock for a test run that must not touch
+        # the real data.
+        data_dir = Path(os.getenv("ARGUS_DATA_DIR", str(DATA_DIR)))
+        if not data_dir.is_absolute():
+            data_dir = BASE_DIR / data_dir
         return cls(
+            DATA_DIR=data_dir,
+            DB_PATH=data_dir / "database.db",
             HOST=os.getenv("HOST", "0.0.0.0"),
             PORT=int(os.getenv("PORT", 8000)),
             DEBUG=os.getenv("DEBUG", "false").lower() == "true",
             SECRET_KEY=os.getenv("SECRET_KEY", "dev-secret-change-in-production"),
             CAMERA_INDEX=int(os.getenv("CAMERA_INDEX", 0)),
+            CAMERA_SOURCE=os.getenv("CAMERA_SOURCE", ""),
+            CAMERA_SOURCE_REALTIME=os.getenv("CAMERA_SOURCE_REALTIME", "true").lower() == "true",
             MOTION_SENSITIVITY=int(os.getenv("MOTION_SENSITIVITY", 25)),
             DETECTION_THRESHOLD=float(os.getenv("DETECTION_THRESHOLD", 0.5)),
+            OBJECT_IMGSZ=int(os.getenv("OBJECT_IMGSZ", 640)),
+            OBJECT_BACKEND=os.getenv("OBJECT_BACKEND", "auto").lower(),
+            MOTION_WIDTH=int(os.getenv("MOTION_WIDTH", 320)),
+            DETECTION_AUTOSTART=os.getenv("DETECTION_AUTOSTART", "true").lower() == "true",
+            STREAM_MAX_FPS=float(os.getenv("STREAM_MAX_FPS", 15.0)),
+            STREAM_WIDTH=int(os.getenv("STREAM_WIDTH", 960)),
+            FACE_RECOGNITION_ENABLED=os.getenv("FACE_RECOGNITION_ENABLED", "false").lower() == "true",
             FACE_RECOGNITION_THRESHOLD=float(os.getenv("FACE_RECOGNITION_THRESHOLD", 0.6)),
             FACE_SIMILARITY_THRESHOLD=float(os.getenv("FACE_SIMILARITY_THRESHOLD", 0.4)),
             # Threat detection

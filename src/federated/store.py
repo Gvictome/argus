@@ -35,6 +35,18 @@ from src.federated.features import LABEL_NAMES, N_CLASSES, N_FEATURES, describe
 logger = logging.getLogger(__name__)
 
 
+def holdout_split(X, y, seed: int = 0, val_frac: float = 0.2):
+    """Deterministic train/validation split.
+
+    Shared by the FL client and the API's validation gate, so a candidate
+    is always scored on samples it did not train on.
+    """
+    rng = np.random.default_rng(seed)
+    idx = rng.permutation(len(X))
+    cut = int(len(X) * (1.0 - val_frac))
+    return X[idx[:cut]], y[idx[:cut]], X[idx[cut:]], y[idx[cut:]]
+
+
 class SampleStore:
     def __init__(self, path: Path, max_samples: int = 200_000):
         self.path = Path(path)
@@ -107,12 +119,16 @@ class SampleStore:
                 self._compact()
         return sid
 
-    def set_label_by_n(self, n: int, label: int) -> bool:
+    def set_label_by_n(self, n: int, label: int, note: Optional[str] = None) -> bool:
         with self._lock:
             r = self.by_n(n)
             if r is None:
                 return False
             r["y"] = int(label)
+            if note:
+                # Keep the operator's own words: the label is lossy, the
+                # text says what they actually saw.
+                r.setdefault("meta", {})["operator_label"] = note[:120]
             self._rewrite()
             return True
 

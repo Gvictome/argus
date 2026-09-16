@@ -11,6 +11,7 @@ The dashboard's own contract lives in src/api/dashboard_routes.py.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import subprocess
@@ -25,6 +26,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from src.config import settings
+from src.federated import model_state
 from src.federated.features import LABEL_NAMES, N_CLASSES, N_FEATURES
 
 logger = logging.getLogger(__name__)
@@ -39,6 +41,8 @@ _state = {
     "round_proc": None,
     "round_started": None,
     "round_log": [],
+    "round_dir": None,
+    "round_result": None,
     "last_metrics": None,
 }
 
@@ -114,40 +118,54 @@ async def head_status(request: Request):
         "classes": list(LABEL_NAMES),
         "samples": st.stats(),
         "last_metrics": _state["last_metrics"],
+        "model": model_state.summary(request.app),
     }
 
 
 class TrainRequest(BaseModel):
     epochs: int = 8
     min_samples: int = 200
+    tolerance: float = 0.01
+
+
+def _train_local_candidate(app, epochs: int):
+    from src.federated.head import FederatedHead
+    from src.federated.store import holdout_split
+
+    X, y = app.state.fl_store.labelled()
+    Xt, yt, _, _ = holdout_split(X, y, seed=0)
+    candidate = FederatedHead(seed=0)
+    candidate.set_weights(app.state.fl_head.get_weights())
+    t0 = time.perf_counter()
+    candidate.fit(Xt, yt, epochs=epochs)
+    path = Path(settings.DATA_DIR) / "fl_local_candidate.npz"
+    candidate.save(path)
+    return path, round(time.perf_counter() - t0, 2), int(len(Xt))
 
 
 @router.post("/api/federated/head/train", tags=["Federated"])
 async def train_head(body: TrainRequest, request: Request):
-    """Train locally, without a Flower server. The fast inner loop."""
-    h, st = _head(request), _store(request)
-    X, y = st.labelled()
+    """Train a copy locally, then gate it into the live node.
+
+    Trains a copy rather than the live head, so a bad run never reaches
+    inference, and runs off the event loop so the API keeps serving.
+    """
+    _head(request)
+    st = _store(request)
+    X, _ = st.labelled()
     if len(X) < body.min_samples:
         raise HTTPException(
             409,
             f"only {len(X)} labelled samples, need {body.min_samples}. "
             f"Label more, or POST /api/federated/samples/bootstrap.",
         )
-    cut = int(len(X) * 0.8)
-    t0 = time.perf_counter()
-    h.fit(X[:cut], y[:cut], epochs=body.epochs)
-    loss, acc = h.evaluate(X[cut:], y[cut:])
-    bal = h.balanced_accuracy(X[cut:], y[cut:])
-    _state["last_metrics"] = {
-        "loss": round(loss, 4),
-        "accuracy": round(acc, 4),
-        "balanced_accuracy": round(bal, 4),
-        "train_samples": cut,
-        "val_samples": len(X) - cut,
-        "seconds": round(time.perf_counter() - t0, 2),
-        "at": time.time(),
-    }
-    return _state["last_metrics"]
+    path, secs, n_train = await asyncio.to_thread(
+        _train_local_candidate, request.app, body.epochs)
+    decision = await asyncio.to_thread(
+        model_state.accept_candidate, request.app, path, "local-train",
+        body.tolerance, {"seconds": secs, "train_samples": n_train})
+    _state["last_metrics"] = decision
+    return decision
 
 
 @router.post("/api/federated/predict", tags=["Federated"])
@@ -169,6 +187,7 @@ class RoundRequest(BaseModel):
     server: Optional[str] = None
     epochs: int = 6
     min_samples: int = 200
+    tolerance: float = 0.01
 
 
 def _pump(proc, sink: List[str]):
@@ -178,38 +197,80 @@ def _pump(proc, sink: List[str]):
     proc.stdout.close()
 
 
+def _finish_round(app, proc, run_dir: Path, tolerance: float):
+    """Wait for the client, then gate the returned global model into the node."""
+    code = proc.wait()
+    candidate = run_dir / "global.npz"
+    rounds = 0
+    events = run_dir / "events.jsonl"
+    if events.exists():
+        for line in events.read_text(encoding="utf-8").splitlines():
+            try:
+                if json.loads(line).get("kind") == "global":
+                    rounds += 1
+            except Exception:
+                pass
+
+    if code != 0 or not candidate.exists():
+        _state["round_result"] = {
+            "accepted": False,
+            "exit_code": code,
+            "rounds": rounds,
+            "reason": "round did not complete" if code != 0
+                      else "server never sent a global model",
+        }
+        return
+
+    try:
+        decision = model_state.accept_candidate(
+            app, candidate, "federated", tolerance,
+            {"rounds": rounds, "run_dir": str(run_dir)})
+    except Exception as exc:
+        logger.exception("Validation gate failed")
+        decision = {"accepted": False, "reason": f"gate failed: {exc}"}
+    _state["round_result"] = decision
+
+
 @router.post("/api/federated/round", tags=["Federated"])
 async def start_round(body: RoundRequest, request: Request):
-    """Connect to the aggregator and run a round now.
+    """Join the aggregator, train on this node's samples, take the update back.
 
-    The scheduler fires at 02:00 on a 14-day interval, which is correct for
-    deployment and useless for a demo with people watching. This is the
-    manual trigger.
+    The client runs as its own process, starting from the weights live now.
+    When it exits, the final global model the server returned goes through
+    the validation gate and, if it holds up, replaces the live head.
     """
     proc = _state["round_proc"]
     if proc is not None and proc.poll() is None:
         raise HTTPException(409, "a round is already running")
 
-    st = _store(request)
+    st, head = _store(request), _head(request)
     X, _ = st.labelled()
     if len(X) < body.min_samples:
         raise HTTPException(
-            409, f"only {len(X)} labelled samples, need {body.min_samples}"
-        )
+            409, f"only {len(X)} labelled samples, need {body.min_samples}")
 
     server = body.server or settings.FL_SERVER_URL
-    _state["round_log"] = []
-    _state["round_started"] = time.time()
+    run_dir = Path(settings.DATA_DIR) / "fl_rounds" / time.strftime("%Y%m%d-%H%M%S")
+    run_dir.mkdir(parents=True, exist_ok=True)
+    head.save(run_dir / "init.npz")
+
     proc = subprocess.Popen(
-        [sys.executable, str(BASE_DIR / "sim" / "fl.py"), "client",
-         "--address", server, "--epochs", str(body.epochs)],
+        [sys.executable, "-m", "src.federated.node_client",
+         "--store", str(st.path), "--init", str(run_dir / "init.npz"),
+         "--out", str(run_dir), "--server", server,
+         "--epochs", str(body.epochs)],
         cwd=str(BASE_DIR), stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT, text=True, bufsize=1,
     )
-    _state["round_proc"] = proc
+    _state.update(round_proc=proc, round_started=time.time(), round_log=[],
+                  round_dir=str(run_dir), round_result=None)
     threading.Thread(target=_pump, args=(proc, _state["round_log"]),
                      daemon=True).start()
-    return {"started": True, "server": server, "labelled_samples": int(len(X))}
+    threading.Thread(target=_finish_round,
+                     args=(request.app, proc, run_dir, body.tolerance),
+                     daemon=True).start()
+    return {"started": True, "server": server,
+            "labelled_samples": int(len(X)), "run_dir": str(run_dir)}
 
 
 @router.get("/api/federated/round", tags=["Federated"])
@@ -220,5 +281,7 @@ async def round_status():
         "running": running,
         "exit_code": None if running or proc is None else proc.returncode,
         "started": _state["round_started"],
+        "run_dir": _state["round_dir"],
+        "result": _state["round_result"],
         "log": _state["round_log"][-60:],
     }

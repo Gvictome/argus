@@ -59,6 +59,26 @@ _PRETTY = {
     "package": "Package delivery",
 }
 
+# Vocabularies for reading the dashboard's free-text corrections. Anomaly
+# words are checked first, so "unrecognised person" is an anomaly, not a
+# routine person.
+_ANOMALY_WORDS = {
+    "anomaly", "stranger", "unusual", "suspicious", "intruder", "threat",
+    "unknown", "unrecognized", "unrecognised", "alert", "wrong", "trespasser",
+}
+_ROUTINE_WORDS = {
+    "routine", "normal", "ok", "okay", "fine", "expected", "resident",
+    "member", "household", "familiar", "benign", "neighbor", "neighbour",
+}
+# Keyed by head class index: 0 person, 1 vehicle, 2 animal, 3 package.
+_CLASS_WORDS = {
+    0: {"person", "people", "human", "man", "woman", "kid", "child",
+        "pedestrian", "visitor", "guest", "driver", "courier"},
+    1: {"vehicle", "car", "truck", "van", "bike", "bicycle", "motorcycle", "bus"},
+    2: {"animal", "dog", "cat", "bird", "pet", "deer", "raccoon", "squirrel"},
+    3: {"package", "parcel", "box", "delivery", "mail"},
+}
+
 
 def _iso(ts: float) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat().replace("+00:00", "Z")
@@ -154,13 +174,15 @@ def build_status(request: Request) -> dict:
     except Exception as exc:
         logger.debug("status: detection service unavailable: %s", exc)
 
-    head = getattr(request.app.state, "fl_head", None)
+    # The status strip should show what the node is really doing: the
+    # worker's measured detection rate, not the stream's.
+    worker = getattr(request.app.state, "detection_worker", None)
+    if worker is not None and worker.running:
+        fps = worker.detect_rate.value()
+
     store = getattr(request.app.state, "fl_store", None)
-    rounds = getattr(request.app.state, "fl_rounds_completed", 0)
-    model_version = (
-        f"fl-{datetime.now().strftime('%Y.%m.%d')}-r{rounds}"
-        if head is not None else "untrained"
-    )
+    from src.federated.model_state import model_version as _model_version
+    model_version = _model_version(request.app)
 
     return {
         "fps": round(fps, 1),
@@ -219,17 +241,28 @@ def _resolve_label(action: str, label: Optional[str], current: dict) -> int:
             return 0
         return ANOMALY
 
-    key = label.strip().lower().replace(" ", "_")
-    if key in LABEL_NAMES:
-        return LABEL_NAMES.index(key)
-    if key in ("anomaly", "stranger", "unusual"):
+    # The dashboard's Correct box is free text ("Delivery driver", "false
+    # alarm"), not a picker, so an exact-match vocabulary would reject most
+    # real corrections with a 422. Read intent from keywords instead, and
+    # when nothing matches treat the correction as "the call was wrong".
+    key = label.strip().lower()
+    if key.replace(" ", "_") in LABEL_NAMES:
+        return LABEL_NAMES.index(key.replace(" ", "_"))
+
+    words = set(key.replace("_", " ").replace("-", " ").split())
+    phrase = " ".join(key.replace("_", " ").replace("-", " ").split())
+
+    if words & _ANOMALY_WORDS:
         return ANOMALY
-    for i, name in _CLS_FOR_DASHBOARD.items():
-        if key == name:
+    for i, synonyms in _CLASS_WORDS.items():
+        if words & synonyms:
             return i
-    if key in CLASS_NAMES:
-        return CLASS_NAMES.index(key)
-    raise HTTPException(422, f"unrecognised label {label!r}")
+    if words & _ROUTINE_WORDS or any(p in phrase for p in ("false alarm", "false positive")):
+        for i, name in _CLS_FOR_DASHBOARD.items():
+            if name == current["cls"]:
+                return i
+        return 0
+    return _resolve_label("correct", None, current)
 
 
 @router.post("/api/events/{event_id}/label", tags=["Dashboard"])
@@ -246,7 +279,7 @@ async def label_event(event_id: int, body: LabelBody, request: Request):
 
     current = _event_from_row(row, head)
     y = _resolve_label(body.action, body.label, current)
-    store.set_label_by_n(event_id, y)
+    store.set_label_by_n(event_id, y, note=body.label)
 
     return {
         "ok": True,

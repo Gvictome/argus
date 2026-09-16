@@ -97,7 +97,21 @@ def create_app() -> FastAPI:
             camera_module.BOARD.value,
         )
 
-        # Initialize detection service (motion -> YOLO -> faces -> threat)
+        # camera_service backs the single-camera endpoints and the detection
+        # worker. Give it the configured source, not dataclass defaults, so
+        # CAMERA_SOURCE and CAMERA_FPS actually reach the camera.
+        from src.camera import CameraConfig
+        camera_module.camera_service.config = CameraConfig(
+            resolution=settings.CAMERA_RESOLUTION,
+            framerate=settings.CAMERA_FPS,
+            rotation=settings.CAMERA_ROTATION,
+            sensor_id=settings.CAMERA_INDEX,
+            name="primary",
+            source=settings.CAMERA_SOURCE,
+            realtime=settings.CAMERA_SOURCE_REALTIME,
+        )
+
+        # Initialize detection service (motion -> YOLO -> threat)
         from src.detection import detection_service, DetectionConfig
         # Without this the env vars in Settings never reach the pipeline:
         # DetectionConfig's dataclass defaults silently won every time.
@@ -105,27 +119,34 @@ def create_app() -> FastAPI:
             motion_threshold=settings.MOTION_SENSITIVITY,
             detection_threshold=settings.DETECTION_THRESHOLD,
             face_recognition_threshold=settings.FACE_RECOGNITION_THRESHOLD,
+            faces_enabled=settings.FACE_RECOGNITION_ENABLED,
+            object_imgsz=settings.OBJECT_IMGSZ,
+            motion_width=settings.MOTION_WIDTH,
+            cpu_export=settings.OBJECT_BACKEND,
         )
         detection_service.initialize()
         app.state.detection_service = detection_service
 
-        # Initialize face recognition service
-        try:
-            from src.detection.face_recognition import FaceRecognitionService
-            _face_recognizer = FaceRecognitionService(
-                db=db,
-                similarity_threshold=settings.FACE_SIMILARITY_THRESHOLD,
-            )
-            app.state.face_recognizer = _face_recognizer
-            # Without this the pipeline silently falls back to Haar cascade
-            # detection and never resolves identity.
-            detection_service.attach_face_recognizer(_face_recognizer)
-        except Exception as exc:
-            # insightface/onnxruntime missing, or model download failed.
-            # Detection still runs; identity matching is disabled.
-            _face_recognizer = None
-            app.state.face_recognizer = None
-            logger.warning("Face recognition unavailable: %s", exc)
+        # Face recognition: DEPRECATED 2026-09-14, off unless explicitly
+        # enabled. It cost more per frame than YOLO on CPU, and importing
+        # insightface alone added seconds and hundreds of MB to startup.
+        _face_recognizer = None
+        app.state.face_recognizer = None
+        if settings.FACE_RECOGNITION_ENABLED:
+            try:
+                from src.detection.face_recognition import FaceRecognitionService
+                _face_recognizer = FaceRecognitionService(
+                    db=db,
+                    similarity_threshold=settings.FACE_SIMILARITY_THRESHOLD,
+                )
+                app.state.face_recognizer = _face_recognizer
+                detection_service.attach_face_recognizer(_face_recognizer)
+            except Exception as exc:
+                _face_recognizer = None
+                app.state.face_recognizer = None
+                logger.warning("Face recognition unavailable: %s", exc)
+        else:
+            logger.info("Face recognition disabled (deprecated)")
 
         # Initialize threat classification (dangerous-person stage)
         app.state.threat_classifier = None
@@ -198,6 +219,26 @@ def create_app() -> FastAPI:
             app.state.fl_store = None
             app.state.fl_collector = None
 
+        # Restore the last accepted federated model, so an update survives a
+        # restart instead of reverting to random weights.
+        if getattr(app.state, "fl_head", None) is not None:
+            from src.federated.model_state import load_model_state
+            load_model_state(app)
+
+        # Continuous detection (FR-19). Without this the pipeline ran only
+        # while a client held the video stream open, so an unwatched node
+        # recorded nothing. The worker opens the camera on its own thread,
+        # so startup never blocks on hardware.
+        app.state.detection_worker = None
+        if settings.DETECTION_AUTOSTART:
+            from src.detection.worker import DetectionWorker
+            app.state.detection_worker = DetectionWorker(
+                camera=camera_module.camera_service,
+                detector=detection_service,
+                recorder=app.state.event_recorder,
+            )
+            app.state.detection_worker.start()
+
         # Start Federated Learning scheduler if enabled
         if settings.FL_ENABLED:
             model_manager = ModelManager()
@@ -210,6 +251,14 @@ def create_app() -> FastAPI:
     @app.on_event("shutdown")
     async def shutdown_event():
         """Cleanup on shutdown"""
+        # Stop the worker before the models and camera it uses go away.
+        worker = getattr(app.state, "detection_worker", None)
+        if worker is not None:
+            worker.stop()
+        collector = getattr(app.state, "fl_collector", None)
+        if collector is not None:
+            collector.flush()
+
         # Shut down detection service
         if hasattr(app.state, "detection_service"):
             app.state.detection_service.shutdown()

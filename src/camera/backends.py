@@ -255,39 +255,64 @@ class Picamera2Backend(CaptureBackend):
 # ---------------------------------------------------------------------------
 
 class OpenCVBackend(CaptureBackend):
-    """A V4L2/DirectShow/UVC camera. Dev machines, and USB cams anywhere."""
+    """A V4L2/DirectShow/UVC camera, or a video file standing in for one.
+
+    A file source loops at end of stream and, when `realtime` is set, is
+    paced to its own frame rate so the pipeline sees what a live camera
+    would deliver rather than every frame as fast as disk allows.
+    """
 
     name = "opencv"
 
     def __init__(
         self,
-        index: int = 0,
+        index=0,
         resolution: Tuple[int, int] = (1920, 1080),
         framerate: int = 30,
+        realtime: bool = True,
     ):
         self.index = index
+        self.is_file = isinstance(index, str)
         self.resolution = resolution
         self.framerate = framerate
+        self.realtime = realtime
         self._cap = None
+        self._period = 0.0
+        self._next_t = 0.0
 
     def open(self) -> bool:
         import cv2
 
         self._cap = cv2.VideoCapture(self.index)
         if not self._cap.isOpened():
-            logger.error("OpenCV: no camera at index %d", self.index)
+            logger.error("OpenCV: cannot open source %s", self.index)
             self._cap = None
             return False
 
-        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
-        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
-        self._cap.set(cv2.CAP_PROP_FPS, self.framerate)
+        if self.is_file:
+            self.name = "file"
+            fps = self._cap.get(cv2.CAP_PROP_FPS) or self.framerate or 30
+            self._period = 1.0 / fps if self.realtime else 0.0
+        else:
+            self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
+            self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
+            self._cap.set(cv2.CAP_PROP_FPS, self.framerate)
+        self._next_t = time.monotonic()
         return True
 
     def read(self) -> Optional[np.ndarray]:
         if self._cap is None:
             return None
+        if self._period:
+            wait = self._next_t - time.monotonic()
+            if wait > 0:
+                time.sleep(wait)
+            self._next_t = max(self._next_t + self._period, time.monotonic())
         ok, frame = self._cap.read()
+        if not ok and self.is_file:
+            import cv2
+            self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            ok, frame = self._cap.read()
         return frame if ok else None
 
     def close(self) -> None:
@@ -305,6 +330,17 @@ def build_backend(board, sensor_id: int, config) -> CaptureBackend:
     idea in each case: which physical camera.
     """
     from src.camera.platform_detect import Board
+
+    # An explicit source wins over the board: a recording on a dev box,
+    # or a USB camera on a Pi, both go through OpenCV.
+    source = str(getattr(config, "source", "") or "").strip()
+    if source:
+        return OpenCVBackend(
+            index=int(source) if source.isdigit() else source,
+            resolution=config.resolution,
+            framerate=config.framerate,
+            realtime=getattr(config, "realtime", True),
+        )
 
     if board is Board.JETSON:
         return JetsonCSIBackend(

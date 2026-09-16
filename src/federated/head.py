@@ -15,6 +15,7 @@ at the end of a run about framework overhead.
 19 features -> 384 -> 384 -> 128 -> 5 classes.
 """
 
+from pathlib import Path
 from typing import List, Tuple
 
 import numpy as np
@@ -58,8 +59,26 @@ class FederatedHead:
 
     def set_weights(self, params: List[np.ndarray]) -> None:
         for i in range(len(self.W)):
-            self.W[i] = np.asarray(params[2 * i], dtype=np.float32)
-            self.b[i] = np.asarray(params[2 * i + 1], dtype=np.float32)
+            self.W[i] = np.array(params[2 * i], dtype=np.float32)  # copy: never alias another head
+            self.b[i] = np.array(params[2 * i + 1], dtype=np.float32)
+
+    def save(self, path) -> None:
+        """Write weights atomically, so a crash never leaves half a model."""
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.stem + ".tmp.npz")
+        np.savez(tmp, **{f"p{i}": a for i, a in enumerate(self.get_weights())})
+        tmp.replace(path)
+
+    def load(self, path) -> None:
+        with np.load(path) as z:
+            params = [z[f"p{i}"] for i in range(len(z.files))]
+        expected = self.get_weights()
+        if len(params) != len(expected) or any(
+            a.shape != b.shape for a, b in zip(params, expected)
+        ):
+            raise ValueError(f"{path}: weight shapes do not match this head")
+        self.set_weights(params)
 
     # ---- forward / backward ---------------------------------------------
     def _forward(self, X):
