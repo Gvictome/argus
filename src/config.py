@@ -157,6 +157,10 @@ class Settings:
 
     FL_ENABLED: bool = False
     FL_SERVER_URL: str = "localhost:8080"
+    # The aggregator's REST API, e.g. http://192.168.1.50:8090. Optional:
+    # it is only used to announce this node in the server's registry, and
+    # a round trains fine without it.
+    FL_CENTRAL_API: str = ""
     FL_LOCAL_EPOCHS: int = 5
     FL_MIN_SAMPLES: int = 50
     FL_ROUND_HOUR: int = 2  # 2 AM — the idle window
@@ -230,6 +234,7 @@ class Settings:
             CAMERA_ZONE=os.getenv("CAMERA_ZONE", "Front door"),
             FL_ENABLED=os.getenv("FL_ENABLED", "false").lower() == "true",
             FL_SERVER_URL=os.getenv("FL_SERVER_URL", "localhost:8080"),
+            FL_CENTRAL_API=os.getenv("FL_CENTRAL_API", ""),
             FL_LOCAL_EPOCHS=int(os.getenv("FL_LOCAL_EPOCHS", 5)),
             FL_MIN_SAMPLES=int(os.getenv("FL_MIN_SAMPLES", 50)),
             FL_ROUND_HOUR=int(os.getenv("FL_ROUND_HOUR", 2)),

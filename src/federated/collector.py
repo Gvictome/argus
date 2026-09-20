@@ -88,7 +88,9 @@ class EventCollector:
         self.snapshot_width = snapshot_width
         self.snapshot_quality = snapshot_quality
         self._snaps: Dict[int, Tuple[float, bytes]] = {}
+        self._crops: Dict[int, Optional[bytes]] = {}
         self.snapshots_saved = 0
+        self.crops_saved = 0
 
     # ------------------------------------------------------------------
     def observe(self, detections: Sequence, frame_shape: Tuple[int, int],
@@ -211,6 +213,10 @@ class EventCollector:
 
             img = frame
             h, w = img.shape[:2]
+            # The crop is the subject on its own, which is what an image
+            # model would train on later. Captured now so switching to one
+            # never means re-recording everything.
+            self._crops[tid] = self._encode_crop(cv2, frame, box, h, w)
             if w > self.snapshot_width:
                 scale = self.snapshot_width / float(w)
                 img = cv2.resize(img, (self.snapshot_width, max(1, int(h * scale))),
@@ -222,19 +228,48 @@ class EventCollector:
         except Exception as exc:
             logger.warning("collector: snapshot encode failed: %s", exc)
 
-    def _write_snapshot(self, tid: int) -> Optional[str]:
+    def _encode_crop(self, cv2, frame, box, h: int, w: int):
+        """The detection box, padded a little, as JPEG bytes."""
+        pad = 0.10
+        bw, bh = box[2] - box[0], box[3] - box[1]
+        x1 = max(0, int((box[0] - bw * pad) * w))
+        y1 = max(0, int((box[1] - bh * pad) * h))
+        x2 = min(w, int((box[2] + bw * pad) * w))
+        y2 = min(h, int((box[3] + bh * pad) * h))
+        if x2 - x1 < 8 or y2 - y1 < 8:
+            return None
+        ok, buf = cv2.imencode(".jpg", frame[y1:y2, x1:x2],
+                               [int(cv2.IMWRITE_JPEG_QUALITY), int(self.snapshot_quality)])
+        return buf.tobytes() if ok else None
+
+    def _write_snapshot(self, tid: int) -> Tuple[Optional[str], Optional[str]]:
+        """Write the still and the crop. Returns both filenames.
+
+        The crop's name is returned rather than inferred from the still's:
+        anything reading the store later should not have to know the
+        naming convention to find it.
+        """
         best = self._snaps.pop(tid, None)
         if best is None or self.snapshot_dir is None:
-            return None
+            self._crops.pop(tid, None)
+            return None, None
         try:
             self.snapshot_dir.mkdir(parents=True, exist_ok=True)
-            name = f"{uuid.uuid4().hex}.jpg"
+            stem = uuid.uuid4().hex
+            name = f"{stem}.jpg"
             (self.snapshot_dir / name).write_bytes(best[1])
             self.snapshots_saved += 1
-            return name
+
+            crop_name = None
+            crop = self._crops.pop(tid, None)
+            if crop:
+                crop_name = f"{stem}_crop.jpg"
+                (self.snapshot_dir / crop_name).write_bytes(crop)
+                self.crops_saved += 1
+            return name, crop_name
         except Exception as exc:
             logger.warning("collector: snapshot write failed: %s", exc)
-            return None
+            return None, None
 
     def _close_motion(self) -> None:
         seg, self._motion = self._motion, None
@@ -269,6 +304,7 @@ class EventCollector:
         self._boxes.pop(tid, None)
         if t is None:
             self._snaps.pop(tid, None)
+            self._crops.pop(tid, None)
             return False
 
         # A two-frame blip is a detector flicker, not an event. Recording it
@@ -276,12 +312,16 @@ class EventCollector:
         if t.frames < self.min_frames:
             self.dropped_short += 1
             self._snaps.pop(tid, None)
+            self._crops.pop(tid, None)
             return False
 
         x = extract(t)
-        snapshot = self._write_snapshot(tid)
+        snapshot, crop = self._write_snapshot(tid)
         meta = {
             "snapshot": snapshot,
+            # The subject on its own. Kept so an image model can be trained
+            # later without recapturing any of this.
+            "crop": crop,
             "track_id": t.track_id,
             "frames": t.frames,
             "duration_s": round(t.last_seen - t.first_seen, 3),
@@ -324,6 +364,7 @@ class EventCollector:
             "min_frames": self.min_frames,
             "motion_events": self.motion_events,
             "snapshots_saved": self.snapshots_saved,
+            "crops_saved": self.crops_saved,
             "motion_open": self._motion is not None,
             "reach_factor": self.reach_factor,
             "max_idle_s": self.max_idle_s,

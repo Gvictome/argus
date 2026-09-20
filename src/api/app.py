@@ -260,14 +260,21 @@ def create_app() -> FastAPI:
             )
             app.state.detection_worker.start()
 
-        # Start Federated Learning scheduler if enabled
+        # The federated cron. It runs exactly the round the manual trigger
+        # runs: train the head on this node's labelled events in a separate
+        # process, then gate the averaged model before it goes live.
         if settings.FL_ENABLED:
-            model_manager = ModelManager()
-            model_manager.load_model()
-            trainer = LocalTrainer(model_manager, settings)
-            client = ArgusFlowerClient(model_manager, trainer, settings)
-            app.state.fl_scheduler = FLScheduler(client, settings)
+            from src.federated.rounds import run_round_blocking
+
+            app.state.fl_scheduler = FLScheduler(
+                client=None,
+                config=settings,
+                runner=lambda: run_round_blocking(app),
+            )
             await app.state.fl_scheduler.start()
+            logger.info("Federated cron on: every %d days at %02d:00, server %s",
+                        settings.FL_ROUND_INTERVAL_DAYS, settings.FL_ROUND_HOUR,
+                        settings.FL_SERVER_URL)
 
     @app.on_event("shutdown")
     async def shutdown_event():

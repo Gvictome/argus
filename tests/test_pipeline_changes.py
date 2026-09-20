@@ -602,7 +602,13 @@ class TestSnapshotsAndClips:
         collector = EventCollector(store, db=db, snapshot_dir=tmp_path / "snapshots")
         return collector, store, db
 
-    def test_event_keeps_a_snapshot_and_records_its_path(self, tmp_path):
+    def test_event_keeps_a_still_and_a_crop_of_the_subject(self, tmp_path):
+        """Two images per event: the scene, and the subject on its own.
+
+        The crop is what an image model would train on later, so its
+        filename is recorded rather than left to be guessed from the
+        still's.
+        """
         collector, store, db = self._collector(tmp_path)
 
         for i in range(6):
@@ -613,14 +619,23 @@ class TestSnapshotsAndClips:
             collector.observe([det], (480, 640), when=1000.0 + i * 0.1, frame=frame)
         collector.flush()
 
-        files = list((tmp_path / "snapshots").glob("*.jpg"))
-        assert len(files) == 1, "no still saved for the event"
-        assert files[0].stat().st_size > 0
-
         row = store.recent(1)[0]
-        assert row["meta"]["snapshot"] == files[0].name
+        snapshots = tmp_path / "snapshots"
+        still = snapshots / row["meta"]["snapshot"]
+        crop = snapshots / row["meta"]["crop"]
+        assert still.exists() and crop.exists()
+
+        full_img = cv2.imread(str(still))
+        crop_img = cv2.imread(str(crop))
+        assert full_img is not None and crop_img is not None, "unreadable image"
+        assert full_img.shape[:2] == (480, 640)
+        # The detection box is 160x200, padded 10% each side.
+        assert 150 <= crop_img.shape[1] <= 260
+        assert 180 <= crop_img.shape[0] <= 300
+        assert collector.status()["crops_saved"] == 1
+
         detection_events = [e for e in db.events if e["event_type"] == "detection"]
-        assert detection_events[0]["media_path"].endswith(files[0].name)
+        assert detection_events[0]["media_path"].endswith(still.name)
 
     def test_no_frame_means_no_snapshot_but_still_an_event(self, tmp_path):
         """Callers without a frame keep working."""

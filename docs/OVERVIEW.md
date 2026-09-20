@@ -110,10 +110,25 @@ regress**. Accepted weights persist across restarts.
 A rejection is the system working: an average that suits other sites can
 hurt this one.
 
-**PI** `./scripts/fl_trial.sh`
+**PI** `./scripts/fl_trial.sh` runs one by hand. **LAPTOP**
+`.\scripts\run_central_server.ps1` is the other half: a Flower server that
+averages what the cameras send, checkpoints every version of the combined
+model, and exposes a REST API and Prometheus metrics. It serves sessions
+back to back and resumes from its last checkpoint, because a camera on a
+fortnightly schedule connects days after the previous session ended.
+
+With `FL_ENABLED=true`, `FL_SERVER_URL` and `FL_CENTRAL_API` set, the node
+runs rounds on its own schedule — every 14 days at 2am, only while idle,
+catching up if the Pi was off across the due date. The scheduled round and
+the manual one call the same code (`src/federated/rounds.py`), so the demo
+cannot drift from what runs unattended.
 
 Training runs in its own process on one core, so detection continues — on
 x86 the measured cost was 0.1% of frame rate.
+
+Recordings are training data too: `scripts/ingest_video.py` replays a clip
+through the detector and labels everything it produces in one pass, using
+the clip's own frame rate so speed and dwell come out right.
 
 ## 7 · Two dashboards
 

@@ -49,7 +49,7 @@ from src.federated.store import SampleStore, holdout_split  # noqa: E402
 
 class NodeHeadClient(fl.client.NumPyClient):
     def __init__(self, store_path: Path, init_weights: Path, out_dir: Path,
-                 epochs: int, seed: int):
+                 epochs: int, seed: int, node_name: str = "node"):
         X, y = SampleStore(store_path).labelled()
         if len(X) == 0:
             raise SystemExit("no labelled samples in the store")
@@ -60,6 +60,7 @@ class NodeHeadClient(fl.client.NumPyClient):
         self.out = Path(out_dir)
         self.out.mkdir(parents=True, exist_ok=True)
         self.epochs = epochs
+        self.node_name = node_name
         self.round = 0
         self._log(kind="ready", train=len(self.Xt), val=len(self.Xv),
                   params=self.head.n_params,
@@ -78,13 +79,29 @@ class NodeHeadClient(fl.client.NumPyClient):
     def fit(self, parameters, config):
         self.head.set_weights(parameters)
         self.round += 1
+        # The server sets the epoch count per round; --epochs is the
+        # fallback when it does not.
+        epochs = int(config.get("local_epochs", self.epochs) or self.epochs)
         t0 = time.perf_counter()
-        m = self.head.fit(self.Xt, self.yt, epochs=self.epochs, seed=self.round)
+        m = self.head.fit(self.Xt, self.yt, epochs=epochs, seed=self.round)
         loss, acc = self.head.evaluate(self.Xv, self.yv)
         bal = self.head.balanced_accuracy(self.Xv, self.yv)
-        self._log(kind="fit", round=self.round, secs=round(time.perf_counter() - t0, 3),
+        self._log(kind="fit", round=self.round, epochs=epochs,
+                  secs=round(time.perf_counter() - t0, 3),
                   loss=round(loss, 4), acc=round(acc, 4), bal_acc=round(bal, 4))
-        return self.head.get_weights(), len(self.Xt), {"train_loss": float(m["loss"])}
+        # The aggregator records these per client, so they must be the real
+        # numbers rather than only the training loss.
+        return self.head.get_weights(), len(self.Xt), {
+            # Flower identifies a client by connection, which tells the
+            # aggregator nothing about which camera it was. Name ourselves.
+            "node_id": self.node_name,
+            "train_loss": float(m["loss"]),
+            "loss": float(loss),
+            "accuracy": float(acc),
+            "balanced_accuracy": float(bal),
+            "samples": float(len(self.Xt)),
+            "fit_seconds": float(time.perf_counter() - t0),
+        }
 
     def evaluate(self, parameters, config):
         # These are the server's *aggregated* weights, not ours. Persisting
@@ -95,8 +112,32 @@ class NodeHeadClient(fl.client.NumPyClient):
         self.head.save(self.out / "global.npz")
         self._log(kind="global", round=self.round, loss=round(loss, 4),
                   acc=round(acc, 4), bal_acc=round(bal, 4))
-        return float(loss), len(self.Xv), {"accuracy": float(acc),
+        return float(loss), len(self.Xv), {"node_id": self.node_name,
+                                           "accuracy": float(acc),
                                            "balanced_accuracy": float(bal)}
+
+
+def register_with_central(api: str, node_name: str) -> None:
+    """Announce this node to the aggregator's registry.
+
+    Best effort: the round is what matters, and a server without the REST
+    API still trains perfectly well.
+    """
+    import json as _json
+    import socket
+    import urllib.request
+
+    body = _json.dumps({"node_id": node_name,
+                        "hostname": socket.gethostname()}).encode()
+    try:
+        req = urllib.request.Request(f"{api.rstrip('/')}/api/nodes/register",
+                                     data=body, method="POST",
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            r.read()
+        print(f'{{"kind": "registered", "api": "{api}"}}', flush=True)
+    except Exception as exc:
+        print(f'{{"kind": "register_failed", "error": "{exc}"}}', flush=True)
 
 
 def main() -> int:
@@ -107,10 +148,16 @@ def main() -> int:
     ap.add_argument("--server", default="127.0.0.1:8080")
     ap.add_argument("--epochs", type=int, default=6)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--node-name", default="node")
+    ap.add_argument("--central-api", default="",
+                    help="Aggregator REST API, e.g. http://192.168.1.50:8090")
     a = ap.parse_args()
 
+    if a.central_api:
+        register_with_central(a.central_api, a.node_name)
+
     client = NodeHeadClient(Path(a.store), Path(a.init) if a.init else None,
-                            Path(a.out), a.epochs, a.seed)
+                            Path(a.out), a.epochs, a.seed, a.node_name)
     fl.client.start_client(server_address=a.server, client=client.to_client())
     client._log(kind="done", rounds=client.round)
     return 0

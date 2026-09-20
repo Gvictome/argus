@@ -64,7 +64,42 @@ yours. Without the gate, one bad round quietly degrades a working camera.
 
 ---
 
-## Running one · PI
+## The two halves
+
+**The camera** trains and sends. **The central server** averages and keeps
+the history. They are different machines.
+
+### The central server · LAPTOP
+
+```powershell
+cd $HOME\Documents\argus\argus
+.\scripts\run_central_server.ps1
+```
+
+It prints the two lines to set on the Pi. It keeps every version of the
+combined model in `central_server/checkpoints`, and it **stays up between
+sessions** — a camera on a fortnightly schedule connects days later, so a
+server that exited after the first session would not be there when it
+mattered. Each session resumes from the last checkpoint.
+
+Watch it at `http://localhost:8090/api/training/summary`, which lists every
+round with its loss and accuracy, and `http://localhost:8090/api/nodes`,
+which lists the cameras that have trained and what they scored.
+
+### The camera · PI
+
+```bash
+export FL_ENABLED=true
+export FL_SERVER_URL=192.168.1.50:8080        # the laptop
+export FL_CENTRAL_API=http://192.168.1.50:8090
+./scripts/run_node.sh
+```
+
+With `FL_ENABLED=true` the node runs rounds **on its own schedule** — every
+14 days at 2am by default, only while nothing is moving, and it catches up
+if the Pi was switched off across the due date. That is the cron.
+
+## Running one by hand · PI
 
 The node must already be running in another shell.
 
@@ -73,8 +108,25 @@ cd ~/argus
 ./scripts/fl_trial.sh
 ```
 
-That does everything: starts the coordinator, prepares training data, trains
-locally, joins the round, and reports the result.
+That does everything: starts a coordinator, prepares training data, trains
+locally, joins the round, and reports the result. It runs **exactly** the
+same round the schedule runs, so the demo and the unattended 2am version
+cannot drift apart.
+
+## Training on saved video · PI
+
+Recordings are training data. Replay a clip through the detector and label
+everything it finds in one go:
+
+```bash
+python scripts/ingest_video.py media/events/primary_human_2026.mp4 --label routine_person
+python scripts/ingest_video.py trespasser.mp4 --label anomaly --every-frame
+```
+
+Each event comes out the same shape the live camera makes: the same
+measurements, a still, and a crop of the subject. Timestamps come from the
+clip's own frame rate, so a two-minute video replayed in fifteen seconds
+does not record everything as moving four times too fast.
 
 ### Reading the result
 

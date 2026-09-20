@@ -333,8 +333,15 @@ def start_flower_server():
                 loss = metrics.get("loss", 0.0) if isinstance(metrics, dict) else 0.0
                 acc = metrics.get("accuracy", 0.0) if isinstance(metrics, dict) else 0.0
                 samples = metrics.get("samples", 0) if isinstance(metrics, dict) else 0
+                node_id = None
+                if isinstance(metrics, dict):
+                    node_id = metrics.get("node_id")
                 client_results.append({
                     "client": str(client_id),
+                    # Flower's client id identifies a connection, not a
+                    # camera. The client names itself in its metrics; fall
+                    # back to the connection id if an older one does not.
+                    "node": str(node_id or client_id),
                     "loss": loss,
                     "accuracy": acc,
                     "samples": samples,
@@ -356,6 +363,20 @@ def start_flower_server():
             save_checkpoint(weights, server_round, {
                 "loss": global_loss, "accuracy": global_acc,
             })
+
+        # Feed the node registry. It has carried update_training() from the
+        # start with nothing calling it, so /api/nodes reported every node
+        # as zero rounds and zero accuracy while training was working.
+        for entry in client_results:
+            try:
+                registry.update_training(
+                    node_id=entry["node"],
+                    loss=float(entry["loss"]),
+                    accuracy=float(entry["accuracy"]),
+                    samples=int(entry["samples"]),
+                )
+            except Exception as exc:
+                logger.warning("Could not record node %s: %s", entry["node"], exc)
 
         # Record in history
         result = RoundResult(
@@ -395,7 +416,22 @@ def start_flower_server():
             )
             return aggregated_parameters, aggregated_metrics
 
+    def _weighted(metrics):
+        """Average client metrics by sample count.
+
+        Without this Flower drops per-client metrics entirely, and every
+        number on the API, in Prometheus and on the Grafana board reads
+        zero while training is actually working.
+        """
+        total = sum(n for n, _ in metrics) or 1
+        keys = set()
+        for _, m in metrics:
+            keys |= {k for k, v in m.items() if isinstance(v, (int, float))}
+        return {k: sum(n * m.get(k, 0.0) for n, m in metrics) / total for k in keys}
+
     strategy_kwargs = {
+        "evaluate_metrics_aggregation_fn": _weighted,
+        "fit_metrics_aggregation_fn": _weighted,
         "min_fit_clients": config["min_clients"],
         "min_evaluate_clients": config["min_clients"],
         "min_available_clients": config["min_clients"],
@@ -608,8 +644,18 @@ def main():
     )
     api_thread.start()
 
-    # Start Flower server in main thread (requires main thread for signal handlers)
-    start_flower_server()
+    # Serve sessions back to back. start_server() returns once its rounds
+    # are done, and a node on a cron schedule connects days later -- a
+    # server that exited after the first session would simply not be there.
+    # Each session reloads the latest checkpoint, so the global model
+    # carries across them.
+    serve_forever = os.environ.get("ARGUS_SERVE_FOREVER", "true").lower() == "true"
+    while True:
+        start_flower_server()
+        if not serve_forever:
+            break
+        logger.info("Session finished. Waiting for the next node to connect.")
+        time.sleep(2)
 
 
 if __name__ == "__main__":

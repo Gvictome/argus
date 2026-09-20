@@ -99,6 +99,57 @@ working.
 
 ---
 
+## 4b · The central server, and the schedule
+
+The laptop is where the cameras send what they learned. Weights only — no
+video, no images.
+
+### LAPTOP — start it
+
+```powershell
+cd $HOME\Documents\argus\argus
+.\scripts\run_central_server.ps1
+```
+
+It prints the two lines to set on the Pi, keeps every version of the
+combined model in `central_server/checkpoints`, and stays up between
+sessions so a scheduled camera finds it days later.
+
+| Watch | URL |
+|---|---|
+| Rounds, loss, accuracy | `http://localhost:8090/api/training/summary` |
+| Cameras and their scores | `http://localhost:8090/api/nodes` |
+| Prometheus | `http://localhost:8090/metrics` |
+
+### PI — join on a schedule
+
+```bash
+export FL_ENABLED=true
+export FL_SERVER_URL=192.168.1.50:8080
+export FL_CENTRAL_API=http://192.168.1.50:8090
+./scripts/run_node.sh
+```
+
+Rounds then run by themselves: every 14 days at 2am, only while nothing is
+moving, catching up if the Pi was off across the due date. Check the
+schedule any time:
+
+```bash
+curl -s localhost:8000/api/federated/status | python -m json.tool
+```
+
+### PI — turn saved video into training data
+
+```bash
+python scripts/ingest_video.py media/events/some_clip.mp4 --label routine_person
+```
+
+Labels: `routine_person`, `routine_vehicle`, `routine_animal`,
+`routine_package`, `anomaly`. Stop the node first — both write to the same
+store.
+
+---
+
 ## 5 · LAPTOP — the product dashboard (optional)
 
 ```powershell

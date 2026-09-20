@@ -48,9 +48,15 @@ class FLScheduler:
         state_path: Where the last-round timestamp is persisted.
     """
 
-    def __init__(self, client, config, state_path: Optional[Path] = None) -> None:
+    def __init__(self, client, config, state_path: Optional[Path] = None,
+                 runner=None) -> None:
         self.client = client
         self.config = config
+        # What a round actually does. The default path predates the
+        # federated head and fine-tunes YOLO instead, which is not what
+        # any other part of the system trains; the application passes the
+        # real one in.
+        self._runner = runner
 
         self.state_path = Path(
             state_path
@@ -209,7 +215,7 @@ class FLScheduler:
 
         Returns True if the round completed without error.
         """
-        if not self.client.config.FL_ENABLED:
+        if not getattr(self.config, "FL_ENABLED", False):
             logger.info("FL is disabled (FL_ENABLED=False) — skipping round")
             return False
 
@@ -241,6 +247,12 @@ class FLScheduler:
 
     def _blocking_fl_round(self) -> None:
         """Synchronous FL round — runs in a thread executor."""
+        if self._runner is not None:
+            result = self._runner()
+            if isinstance(result, dict):
+                logger.info("Scheduled round: accepted=%s %s",
+                            result.get("accepted"), result.get("reason", ""))
+            return
         from src.federated.client import start_client
         start_client(self.config.FL_SERVER_URL, self.client)
 
