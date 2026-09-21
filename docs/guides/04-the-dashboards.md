@@ -34,7 +34,7 @@ the buttons that teach the system.
 ### Start it · LAPTOP
 
 ```powershell
-cd $HOME\Documents\argus\argus
+cd $HOME\argus\argus
 .\scripts\run_dashboard.ps1 -Node 10.0.0.140
 ```
 

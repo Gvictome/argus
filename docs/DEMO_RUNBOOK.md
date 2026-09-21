@@ -305,7 +305,7 @@ carried-item classes. Everything else COCO knows is dropped before NMS.
 | Symptom | Cause | Fix |
 |---|---|---|
 | `worker.camera_error: camera failed to initialize` | Pi can't open the camera | Run `rpicam-hello --list-cameras` and `python -c "from picamera2 import Picamera2"`; see next rows |
-| picamera2 import mentions **numpy** | pip pulled numpy 2, which breaks the apt camera library | `pip install "numpy>=1.26,<2"` then restart Terminal 1 |
+| picamera2 import mentions **numpy** | pip pulled numpy 2, which breaks the apt camera library | `pip install --ignore-installed "numpy>=2.2,<3"` then restart Terminal 1 |
 | `rpicam-hello` lists no cameras | Ribbon cable | Power off, reseat both ends |
 | `Device or resource busy` | Another process has the camera | Close it; restart Terminal 1 |
 | `backend: cpu` on the Pi | No NCNN export | `python scripts/export_cpu_models.py --format ncnn` |

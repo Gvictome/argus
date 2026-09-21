@@ -72,7 +72,7 @@ the history. They are different machines.
 ### The central server · LAPTOP
 
 ```powershell
-cd $HOME\Documents\argus\argus
+cd $HOME\argus\argus
 .\scripts\run_central_server.ps1
 ```
 

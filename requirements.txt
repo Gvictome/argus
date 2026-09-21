@@ -15,7 +15,12 @@ pydantic-settings>=2.1.0
 
 # Computer Vision
 opencv-python>=4.9.0
-numpy>=1.26.0
+# numpy 2.x: the Pi's apt picamera2 is built against 2.x, so pinning <2
+# breaks the camera. Inside a --system-site-packages venv pip will think
+# the system copy satisfies this -- use --ignore-installed to override.
+numpy>=2.2,<3
+# ncnn imports portalocker at export time and does not declare it.
+portalocker>=2.8.0
 Pillow>=10.2.0
 scipy>=1.11.0
 
@@ -53,6 +58,9 @@ PyYAML>=6.0.0
 requests>=2.31.0
 
 # Development
+# markdown backs scripts/build_docs_pdf.py, which renders docs/*.md to the
+# handout PDFs. Undeclared until it failed a rebuild.
+markdown>=3.5
 pytest>=8.0.0
 pytest-asyncio>=0.23.0
 black>=24.1.0

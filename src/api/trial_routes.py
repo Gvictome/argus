@@ -254,11 +254,22 @@ async def start_round(body: RoundRequest, request: Request):
     run_dir.mkdir(parents=True, exist_ok=True)
     head.save(run_dir / "init.npz")
 
+    # Without --node-name the client calls itself "node"; without
+    # --central-api it never POSTs /api/nodes/register, and the registry's
+    # update_training() silently no-ops on an id it has never seen. The
+    # result is a server that trains correctly and reports zero nodes.
+    # rounds.py passes both -- this path had drifted from it, which is the
+    # exact divergence that module exists to prevent.
+    cmd = [sys.executable, "-m", "src.federated.node_client",
+           "--store", str(st.path), "--init", str(run_dir / "init.npz"),
+           "--out", str(run_dir), "--server", server,
+           "--epochs", str(body.epochs),
+           "--node-name", settings.NODE_NAME]
+    if getattr(settings, "FL_CENTRAL_API", ""):
+        cmd += ["--central-api", settings.FL_CENTRAL_API]
+
     proc = subprocess.Popen(
-        [sys.executable, "-m", "src.federated.node_client",
-         "--store", str(st.path), "--init", str(run_dir / "init.npz"),
-         "--out", str(run_dir), "--server", server,
-         "--epochs", str(body.epochs)],
+        cmd,
         cwd=str(BASE_DIR), stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT, text=True, bufsize=1,
     )

@@ -107,7 +107,7 @@ video, no images.
 ### LAPTOP — start it
 
 ```powershell
-cd $HOME\Documents\argus\argus
+cd $HOME\argus\argus
 .\scripts\run_central_server.ps1
 ```
 
@@ -153,7 +153,7 @@ store.
 ## 5 · LAPTOP — the product dashboard (optional)
 
 ```powershell
-cd $HOME\Documents\argus\argus
+cd $HOME\argus\argus
 .\scripts\run_dashboard.ps1 -Node 10.0.0.140
 ```
 
@@ -177,8 +177,56 @@ Next.js chose is missing from `CORS_ORIGINS`. The node's own page at
 |---|---|
 | Only `person` detected | Subject is holding still → `--every-frame`; or it is too small in frame |
 | Nothing detected at all | `python scripts/check_classes.py --camera` — separates model from scene |
-| `camera_error` in status | `python -c "from picamera2 import Picamera2"`; if it mentions numpy → `pip install "numpy>=1.26,<2"` |
+| `camera_error` in status | `python -c "from picamera2 import Picamera2"`; if it mentions numpy → `pip install --ignore-installed "numpy>=2.2,<3"` |
+| `ImportError: ... Bad message` | A system library is **corrupt**, not missing. See "When the card goes bad" below |
 | People look blue | `CAMERA_SWAP_RB=true ./scripts/run_node.sh` |
 | Round returns 409 | Fewer than 200 labelled samples — let `fl_trial.sh` seed them |
 | Dashboard offline, curl works | Wrong port in `CORS_ORIGINS` (Next.js often uses 3001) |
 | `backend: cpu` on the Pi | `python scripts/export_cpu_models.py --format ncnn` |
+
+---
+
+## When the card goes bad
+
+`Bad message` in an `ImportError` is **EBADMSG** — ext4 refusing to hand
+over a file whose checksum no longer matches. The file is corrupt, not
+missing, and reinstalling with `apt` may not even run: `apt` is C++, so a
+damaged `libstdc++` takes it down too. An unclean shutdown is the usual
+cause.
+
+`dpkg` records an md5 for every file it installed, so the whole system can
+be verified offline. **PI**
+
+```bash
+cd / && cat /var/lib/dpkg/info/*.md5sums | md5sum -c 2>/dev/null | grep -v ': OK$' | sed 's/: FAILED.*//' | sed 's|^|/|' > /tmp/bad.txt
+wc -l < /tmp/bad.txt
+```
+
+Map those files back to their packages and reinstall the lot. The
+`grep -v '^diversion'` matters — `dpkg -S` emits diversion lines that are
+not package names:
+
+```bash
+xargs -a /tmp/bad.txt dpkg -S 2>/dev/null | grep -v '^diversion' | cut -d: -f1 | tr ',' '\n' | tr -d ' ' | grep -v '^$' | sort -u > /tmp/badpkgs.txt
+sudo apt install --reinstall -y $(tr '\n' ' ' < /tmp/badpkgs.txt)
+```
+
+If `apt` itself will not start, repair `libstdc++` first with `dpkg`, which
+is plain C. Take the version from `dpkg -l libstdc++6`:
+
+```bash
+cd /tmp
+U=http://deb.debian.org/debian/pool/main/g/gcc-14
+curl -fLO $U/libstdc++6_14.2.0-19_arm64.deb
+sudo dpkg -i /tmp/libstdc++6_14.2.0-19_arm64.deb && sudo ldconfig
+```
+
+Re-run the scan afterwards. Zero failures means every tracked file matches
+Debian's published hash. Reboot if the kernel, `systemd`, `kmod` or the
+Hailo driver were among them, then confirm with `hailortcli fw-control
+identify`.
+
+**A file that fails again after being rewritten means the card is bad** —
+reimage, and do not reuse it. Check `dmesg | grep -iE 'mmc0|I/O error'`:
+a silent failure with no I/O errors logged is typical of a counterfeit or
+worn card.

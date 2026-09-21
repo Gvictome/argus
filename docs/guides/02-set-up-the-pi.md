@@ -70,7 +70,7 @@ You want the words `camera library ok` and at least one camera listed.
 **If the first line complains about numpy**, this fixes it:
 
 ```bash
-pip install "numpy>=1.26,<2"
+pip install --ignore-installed "numpy>=2.2,<3"
 ```
 
 **If no cameras are listed**, power the Pi off and reseat the ribbon cable at

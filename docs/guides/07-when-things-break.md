@@ -32,7 +32,7 @@ rpicam-hello --list-cameras
 
 | Result | Cause | Fix |
 |---|---|---|
-| Error mentions **numpy** | A package upgrade broke the camera library | `pip install "numpy>=1.26,<2"`, restart the node |
+| Error mentions **numpy** | A package upgrade broke the camera library | `pip install --ignore-installed "numpy>=2.2,<3"`, restart the node |
 | `No module named picamera2` | Library missing, or the environment cannot see it | `sudo apt install -y python3-picamera2`, and rebuild the environment with `--system-site-packages` |
 | No cameras listed | Ribbon cable | Power off, reseat both ends |
 | `Device or resource busy` | Something else has the camera | Close it, restart the node |
