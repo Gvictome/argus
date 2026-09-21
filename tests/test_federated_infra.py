@@ -121,3 +121,32 @@ class TestVideoIngest:
 
         assert result.returncode == 2
         assert "unknown label" in result.stdout
+
+
+class TestSchedulerLifecycle:
+    """FL_ENABLED=true must actually boot the node.
+
+    FLScheduler.start() and stop() are synchronous -- they create and
+    cancel the polling task rather than awaiting it. app.py awaited both,
+    so enabling the cron killed the node during startup with "object
+    NoneType can't be used in 'await' expression", and shutdown would
+    have raised the same way. The whole suite passed because nothing
+    started the app with the cron on, which is precisely how it shipped.
+    """
+
+    def test_the_node_boots_and_shuts_down_with_the_cron_enabled(
+            self, tmp_path, monkeypatch):
+        from fastapi.testclient import TestClient
+
+        from src.api.app import create_app
+        from src.config import settings
+
+        monkeypatch.setattr(settings, "FL_ENABLED", True)
+        monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(settings, "DB_PATH", tmp_path / "scheduler.db")
+
+        # Entering the context runs startup, leaving it runs shutdown.
+        # Either half of the bug raises here.
+        with TestClient(create_app()) as client:
+            assert client.get("/api/status").status_code == 200
+            assert getattr(client.app.state, "fl_scheduler", None) is not None

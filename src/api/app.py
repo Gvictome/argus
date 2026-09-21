@@ -271,7 +271,11 @@ def create_app() -> FastAPI:
                 config=settings,
                 runner=lambda: run_round_blocking(app),
             )
-            await app.state.fl_scheduler.start()
+            # start() is synchronous: it creates the polling task on the
+            # running loop and returns. Awaiting it awaits None and takes
+            # the whole node down on startup, so FL_ENABLED=true never
+            # booted. stop() is sync for the same reason.
+            app.state.fl_scheduler.start()
             logger.info("Federated cron on: every %d days at %02d:00, server %s",
                         settings.FL_ROUND_INTERVAL_DAYS, settings.FL_ROUND_HOUR,
                         settings.FL_SERVER_URL)
@@ -305,8 +309,10 @@ def create_app() -> FastAPI:
         if hasattr(app.state, "db"):
             app.state.db.shutdown()
 
-        # Stop FL scheduler if running
-        if hasattr(app.state, "fl_scheduler"):
-            await app.state.fl_scheduler.stop()
+        # Stop FL scheduler if running. Synchronous, like start() -- it
+        # cancels the polling task rather than awaiting it.
+        scheduler = getattr(app.state, "fl_scheduler", None)
+        if scheduler is not None:
+            scheduler.stop()
 
     return app
