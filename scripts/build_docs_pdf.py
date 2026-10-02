@@ -13,6 +13,8 @@ the PDF so a failed render can be inspected.
 Usage:
     python scripts/build_docs_pdf.py
     python scripts/build_docs_pdf.py --docs PROPOSAL SUBSYSTEMS
+    python scripts/build_docs_pdf.py --guides
+    python scripts/build_docs_pdf.py --master          # everything, one PDF
     python scripts/build_docs_pdf.py --out-dir handouts
 
 Exit codes:
@@ -22,9 +24,12 @@ Exit codes:
 """
 
 import argparse
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
+from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -55,6 +60,47 @@ GUIDES = [
     ("guides/07-when-things-break", "7 · When Things Break", "Every failure we hit, and the fix"),
     ("guides/08-for-developers", "8 · For Developers", "Layout, decisions, and open work"),
 ]
+
+# The master reference: everything a new team member needs, in reading
+# order, as one PDF. Paths are relative to the repo root because the
+# simulator's notes live outside docs/. Each entry is (path, part).
+MASTER = [
+    ("docs/reference/01-system-overview.md", "Part I · Technical reference"),
+    ("docs/reference/02-how-to-run.md", "Part I · Technical reference"),
+    ("docs/reference/03-computer-vision.md", "Part I · Technical reference"),
+    ("docs/reference/04-threat-classification.md", "Part I · Technical reference"),
+    ("docs/reference/05-federated-learning.md", "Part I · Technical reference"),
+    ("docs/reference/06-api-data-security.md", "Part I · Technical reference"),
+    ("docs/reference/07-scripts-and-tools.md", "Part I · Technical reference"),
+    ("docs/reference/08-configuration.md", "Part I · Technical reference"),
+    ("docs/reference/09-tests.md", "Part I · Technical reference"),
+    ("docs/reference/10-status-and-gaps.md", "Part I · Technical reference"),
+] + [
+    (f"docs/{stem}.md", "Part II · The guides") for stem, _, _ in GUIDES
+] + [
+    ("docs/QUICKSTART.md", "Part III · Quick start"),
+    ("sim/README.md", "Appendix · The simulator"),
+]
+
+# Additions for the master build only. Chrome draws the page number from
+# the @page margin box; older Chrome ignores the rule and prints no number,
+# which is harmless.
+MASTER_CSS = """
+@page { @bottom-right { content: counter(page); font-size: 8pt; color: #6b7480; } }
+.doc { break-before: page; }
+.doc .part {
+  font-size: 7.5pt; letter-spacing: .16em; text-transform: uppercase;
+  color: #6b7480; font-weight: 600; margin-bottom: 4pt;
+}
+.toc { list-style: none; padding-left: 0; }
+.toc > li { margin: 0 0 3pt; }
+.toc .part-head {
+  margin-top: 12pt; font-size: 8pt; letter-spacing: .14em;
+  text-transform: uppercase; color: #6b7480; font-weight: 600;
+}
+.toc ul { list-style: none; padding-left: 14pt; margin: 2pt 0 4pt; font-size: 9pt; }
+.toc ul li { margin: 0 0 1pt; color: #444b54; }
+"""
 
 CHROME_CANDIDATES = [
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
@@ -151,6 +197,45 @@ def find_chrome() -> str:
     return ""
 
 
+MD_EXTENSIONS = ["tables", "fenced_code", "sane_lists", "attr_list", "toc"]
+
+
+def print_pdf(chrome: str, html_path: Path, pdf_path: Path) -> bool:
+    """Print `html_path` to `pdf_path` with headless Chrome.
+
+    Chrome exits 0 even when it cannot write its output, so printing
+    straight over a PDF that a viewer holds open leaves the old file in
+    place and looks like success. Print to a fresh temporary file instead,
+    then copy it over the target, where a lock fails loudly.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        fresh = Path(tmp) / pdf_path.name
+        result = subprocess.run(
+            [
+                chrome, "--headless", "--disable-gpu", "--no-sandbox",
+                "--no-pdf-header-footer",
+                f"--print-to-pdf={fresh}",
+                html_path.as_uri(),
+            ],
+            capture_output=True, timeout=300,
+        )
+        if not fresh.exists() or fresh.stat().st_size == 0:
+            print(f"  [FAIL] {pdf_path.name}: Chrome produced no PDF")
+            err = result.stderr.decode("utf-8", "ignore").strip()
+            if err:
+                print(f"         {err.splitlines()[-1][:120]}")
+            return False
+        try:
+            shutil.copyfile(fresh, pdf_path)
+        except PermissionError:
+            print(f"  [FAIL] {pdf_path} is open in another program. Close it and run again.")
+            return False
+
+    kb = pdf_path.stat().st_size / 1024
+    print(f"  [ ok ] {pdf_path.name}  ({kb:.0f} KB)")
+    return True
+
+
 def render(md_path: Path, title: str, subtitle: str, out_dir: Path, chrome: str) -> bool:
     import markdown
 
@@ -158,37 +243,85 @@ def render(md_path: Path, title: str, subtitle: str, out_dir: Path, chrome: str)
         print(f"  [FAIL] {md_path.name} not found")
         return False
 
-    body = markdown.markdown(
-        md_path.read_text(encoding="utf-8"),
-        extensions=["tables", "fenced_code", "sane_lists", "attr_list"],
-    )
+    body = markdown.markdown(md_path.read_text(encoding="utf-8"), extensions=MD_EXTENSIONS)
     html_path = out_dir / f"{md_path.stem}.html"
-    pdf_path = out_dir / f"{md_path.stem}.pdf"
     html_path.write_text(
         HTML.format(title=title, subtitle=subtitle, css=CSS, body=body),
         encoding="utf-8",
     )
+    return print_pdf(chrome, html_path, out_dir / f"{md_path.stem}.pdf")
 
-    result = subprocess.run(
-        [
-            chrome, "--headless", "--disable-gpu", "--no-sandbox",
-            "--no-pdf-header-footer",
-            f"--print-to-pdf={pdf_path}",
-            html_path.as_uri(),
-        ],
-        capture_output=True, timeout=180,
+
+def _doc_anchor(path: str) -> str:
+    return "doc-" + Path(path).stem.lower()
+
+
+def _master_section(rel_path: str, part: str) -> tuple:
+    """One document as HTML, plus its title and H2s for the contents page.
+
+    Links between reference files (`05-federated-learning.md`) point at
+    files that do not exist inside a single PDF, so they are rewritten to
+    in-document anchors. Heading ids are prefixed per document, because
+    every guide has its own "Step 1" and duplicate ids send every link to
+    the first one.
+    """
+    import markdown
+
+    md = markdown.Markdown(extensions=MD_EXTENSIONS)
+    text = (BASE_DIR / rel_path).read_text(encoding="utf-8")
+    # House style for this handout: no em dashes. Source files keep theirs.
+    text = text.replace(" — ", " - ").replace("—", " - ")
+    anchor = _doc_anchor(rel_path)
+    body = md.convert(text)
+    body = re.sub(r'id="([^"]+)"', rf'id="{anchor}-\1"', body)
+    body = re.sub(r'href="#([^"]+)"', rf'href="#{anchor}-\1"', body)
+    body = re.sub(
+        r'href="(?:\.\./)*(?:[\w./-]*/)?([\w.-]+)\.md(?:#[^"]*)?"',
+        lambda m: f'href="#doc-{m.group(1).lower()}"', body,
     )
 
-    if not pdf_path.exists() or pdf_path.stat().st_size == 0:
-        print(f"  [FAIL] {md_path.name}: Chrome produced no PDF")
-        err = result.stderr.decode("utf-8", "ignore").strip()
-        if err:
-            print(f"         {err.splitlines()[-1][:120]}")
+    tokens = getattr(md, "toc_tokens", [])
+    title = tokens[0]["name"] if tokens else Path(rel_path).stem
+    subs = [c["name"] for c in (tokens[0]["children"] if tokens else [])]
+    html = (f'<section class="doc" id="{anchor}">'
+            f'<div class="part">{part}</div>{body}</section>')
+    return title, subs, html
+
+
+def build_master(out_dir: Path, chrome: str) -> bool:
+    """Every reference section, guide and quick start as one PDF."""
+    missing = [p for p, _ in MASTER if not (BASE_DIR / p).exists()]
+    if missing:
+        for p in missing:
+            print(f"  [FAIL] {p} not found")
         return False
 
-    kb = pdf_path.stat().st_size / 1024
-    print(f"  [ ok ] {pdf_path.name}  ({kb:.0f} KB)")
-    return True
+    toc, sections, last_part = [], [], None
+    for rel_path, part in MASTER:
+        title, subs, html = _master_section(rel_path, part)
+        sections.append(html)
+        if part != last_part:
+            toc.append(f'<li class="part-head">{part}</li>')
+            last_part = part
+        items = "".join(f"<li>{s}</li>" for s in subs)
+        toc.append(f'<li><a href="#{_doc_anchor(rel_path)}">{title}</a>'
+                   + (f"<ul>{items}</ul>" if items else "") + "</li>")
+
+    stamp = date.today().isoformat()
+    body = (f'<h2>Contents</h2><ul class="toc">{"".join(toc)}</ul>'
+            + "".join(sections))
+    html_path = out_dir / "ARGUS_Master_Reference.html"
+    html_path.write_text(
+        HTML.format(
+            title="ARGUS Master Reference",
+            subtitle=(f"How it works, how to run it, every important script, "
+                      f"and the tests. Built {stamp} from docs/ on the "
+                      f"feat/threat-detection branch."),
+            css=CSS + MASTER_CSS, body=body,
+        ),
+        encoding="utf-8",
+    )
+    return print_pdf(chrome, html_path, out_dir / "ARGUS_Master_Reference.pdf")
 
 
 def main() -> int:
@@ -196,6 +329,8 @@ def main() -> int:
     ap.add_argument("--docs", nargs="*", help="Doc stems, e.g. PROPOSAL.")
     ap.add_argument("--guides", action="store_true",
                     help="Render the plain-language guide set instead.")
+    ap.add_argument("--master", action="store_true",
+                    help="Render the reference, guides and quick start as one PDF.")
     ap.add_argument("--out-dir", default="docs/pdf",
                     help="Output folder; an absolute path is used as given.")
     args = ap.parse_args()
@@ -209,6 +344,12 @@ def main() -> int:
 
     out_dir = BASE_DIR / args.out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.master:
+        ok = build_master(out_dir, chrome)
+        print()
+        print(f"Master PDF written to {out_dir}" if ok else "Master PDF failed")
+        return 0 if ok else 1
 
     source = GUIDES if args.guides else DEFAULT_DOCS
     wanted = source

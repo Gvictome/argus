@@ -47,7 +47,10 @@ static/         the built-in live page (one HTML file)
 | What the detector sees | `python scripts/check_classes.py --camera` |
 | Build these PDFs | `python scripts/build_docs_pdf.py --guides` |
 
-Tests are fast (~30s) because nothing heavyweight loads at import.
+The suite is 303 tests, about 100 seconds; most of that is three app
+startups and one video ingest. A clean run needs `pytest-asyncio` and
+`ultralytics` installed and `media/vtest.avi` present. See
+`docs/reference/09-tests.md`.
 
 **Gate any push on the test command's exit code, not on reading its
 output.** A grep for "failed" matches a passing summary line too, which is
@@ -125,6 +128,11 @@ quote laptop numbers as Pi numbers.
 ---
 
 ## Documentation
+
+- `docs/pdf/ARGUS_Master_Reference.pdf`: everything below in one PDF
+  (`python scripts/build_docs_pdf.py --master`)
+- `docs/reference/`: the technical reference, covering every module, route,
+  setting and test, and the known gaps
 
 - `docs/guides/` — these guides, plain language, one topic each
 - `docs/QUICKSTART.md` — every command, labelled by machine

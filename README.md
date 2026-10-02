@@ -1,147 +1,120 @@
 # ARGUS
 ## Autonomous Residential Guardian & Utility System
 
-AI-Powered Home Security & Automation built on Raspberry Pi 5
+An edge camera node that detects what is in front of it, decides whether
+that is routine for the place it is watching, records the moments that
+matter, and learns from other nodes without any of them sharing footage.
+
+Senior Design 2026. Showcase 2026-11-22.
+
+> **Work on `feat/threat-detection`.** That branch is the real system.
+> `master` and `main` are older and do not have most of what is described
+> here.
 
 ---
 
-## Overview
+## What runs on a node
 
-ARGUS is a senior design project that creates an intelligent home security system using edge AI computing. The system provides real-time threat detection, face recognition, and smart home automation without cloud dependencies.
+```
+camera → motion → YOLOv8n (person / vehicle / animal / package) → threat model (armed person?)
+           │                         │
+           │                         ├─► live annotated stream and dashboard
+           │                         └─► event clips with 5 s pre-roll
+           └─► one event per track → 19 features → labelled by a person
+                                         → federated head (is this routine HERE?)
+                                         → Flower rounds, weights only → validation gate
+```
+
+| Model | Job | Learns? |
+|---|---|---|
+| YOLOv8n (COCO) | What is in frame | No, frozen |
+| Threat model (YOLO11s, AGPL-3.0, third party) | Is this person carrying a weapon | No, frozen |
+| Federated head (numpy MLP, ~200K params) | Is this detection routine for this site | **Yes**, on each node, averaged across nodes |
 
 ## Hardware
 
-| Component | Model | Description |
-|-----------|-------|-------------|
-| SBC | Raspberry Pi 5 (8GB) | Main compute unit |
-| AI Accelerator | Raspberry Pi AI HAT+ 2 (Hailo-10H, 40 TOPS INT8, 8GB) | Neural network accelerator |
-| Camera | Raspberry Pi Camera Module 3 (12MP) | Primary vision input |
-| Enclosure | HighPi Pro 5S Case | Enclosure with ventilation |
-| Power | USB-C PD Power Supply | 27W power delivery |
-| Cooling | Active Cooler | Thermal management |
+| Component | Model |
+|---|---|
+| Board | Raspberry Pi 5 (8 GB) |
+| Accelerator | Raspberry Pi AI HAT+ 2 (Hailo-10H, 40 TOPS INT8). Not yet used: needs a `.hef` compiled on x86_64 Linux |
+| Camera | Raspberry Pi Camera Module 3 |
+| Aggregator | Any laptop (Windows scripts provided) |
 
-## Features
+The camera layer also supports Jetson Orin (CSI over GStreamer) and any
+OpenCV camera or video file.
 
-- Real-time person/object detection (YOLOv8)
-- Face recognition (known vs unknown)
-- Motion zones with alerts
-- Video recording on events
-- Live streaming (HLS/WebRTC)
-- Home Assistant integration
-- Push notifications (Telegram/Discord)
-- 100% offline operation - no cloud dependencies
+## Quick start
+
+```bash
+git clone https://github.com/Gvictome/argus.git && cd argus
+git checkout feat/threat-detection
+python -m venv .venv && source .venv/bin/activate     # Windows: .venv/Scripts/activate
+pip install -r requirements.txt
+python scripts/fetch_models.py                         # threat-model weights
+
+./scripts/run_node.sh                                  # on the Pi
+python scripts/mock_demo.py --reset                    # anywhere, against media/vtest.avi
+python -m pytest -q                                    # 303 tests
+```
+
+Open `http://<node>:8000/dashboard`.
+
+A federated simulation with a real Flower server and three clients:
+
+```bash
+python sim/fl.py serve --rounds 5 --clients 3
+python sim/fl.py client --site driveway     # and --site backdoor, --site yard, in their own shells
+```
+
+Every command, by machine: [`docs/reference/02-how-to-run.md`](docs/reference/02-how-to-run.md).
+
+## Documentation
+
+**Start with the master reference PDF:**
+[`docs/pdf/ARGUS_Master_Reference.pdf`](docs/pdf/ARGUS_Master_Reference.pdf).
+It contains everything below in one file. Rebuild it with
+`python scripts/build_docs_pdf.py --master`.
+
+| | |
+|---|---|
+| [`docs/reference/`](docs/reference/) | The technical reference: overview, how to run, computer vision, threat classification, federated learning, API and data, scripts, configuration, tests, status and gaps |
+| [`docs/guides/`](docs/guides/) | Eight plain-language guides, one topic each |
+| [`docs/QUICKSTART.md`](docs/QUICKSTART.md) | Every demo command, labelled PI or LAPTOP |
+| [`sim/README.md`](sim/README.md) | The node simulator, and what it can and cannot prove |
+| [`docs/THREAT_DETECTION.md`](docs/THREAT_DETECTION.md), [`docs/HAILO_PIPELINE.md`](docs/HAILO_PIPELINE.md), [`docs/CLOUDFLARE_TUNNEL.md`](docs/CLOUDFLARE_TUNNEL.md) | Deep dives |
+| [`docs/PROPOSAL.md`](docs/PROPOSAL.md) | The project proposal |
+
+## Repository layout
+
+```
+main.py              node entry point
+src/camera/          board detection and capture backends
+src/detection/       motion, YOLO, threat, overlay, worker, recorder
+src/federated/       features, collector, store, head, gate, rounds, client, scheduler, robust aggregation
+src/api/             routes, auth, dashboard contract, federated endpoints
+central_server/      Flower aggregator + REST + Prometheus/Grafana
+sim/                 node simulator and synthetic multi-site workload
+scripts/             runners, exports, benchmarks, tools
+tests/               pytest suite
+docs/                reference, guides, runbooks, proposal
+```
 
 ## Team
 
 | Name | Role | Focus |
-|------|------|-------|
-| Christian | Electrical Engineer | Hardware, sensors, power |
-| Giovanny | Computer Engineer | AI/ML, detection, optimization |
-| Mohammed | Computer Engineer | Backend, API, integrations |
-| Saifeddine | Computer Engineer | Software, Federated Learning |
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                         ARGUS                                │
-├─────────────────────────────────────────────────────────────┤
-│  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐        │
-│  │ Camera  │  │   AI    │  │  Home   │  │ Security│        │
-│  │ Module  │──│Detection│──│Automaton│──│  Layer  │        │
-│  └─────────┘  └─────────┘  └─────────┘  └─────────┘        │
-│       │            │            │            │              │
-│  ┌────┴────────────┴────────────┴────────────┴────┐        │
-│  │              FastAPI Backend                    │        │
-│  └────────────────────┬───────────────────────────┘        │
-│                       │                                     │
-│  ┌────────────────────┴───────────────────────────┐        │
-│  │              Web Dashboard (Next.js)            │        │
-│  └─────────────────────────────────────────────────┘        │
-└─────────────────────────────────────────────────────────────┘
-```
-
-## Detection Pipeline
-
-```
-Camera Stream → Motion Detection → Object Classification
-                                          │
-                    ┌─────────────────────┼─────────────────────┐
-                    │                     │                     │
-               Known Face            Unknown Human           Object
-                    │                     │                     │
-                Log Entry            Alert + Record         Log + Save
-```
-
-## Quick Start
-
-```bash
-# Clone repository
-git clone https://github.com/Gvictome/argus.git
-cd argus
-
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # Linux/Mac
-# or: .\venv\Scripts\activate  # Windows
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Run ARGUS
-python -m src.main
-```
-
-## Project Structure
-
-```
-argus/
-├── config/          # Configuration files
-├── src/             # Source code
-│   ├── core/        # Main controller
-│   ├── capture/     # Camera & sensors
-│   ├── detection/   # AI models
-│   ├── actions/     # Alerts & automation
-│   └── api/         # REST API
-├── web/             # Next.js dashboard
-├── tests/           # Test suite
-└── docs/            # Documentation
-```
-
-## Documentation
-
-- [Project Proposal](docs/PROPOSAL.md)
-- [Team Tasks](TEAM_TASKS.md)
-- [Web App Architecture](docs/WEB_APP_ARCHITECTURE.md)
-- [API Documentation](docs/api.md)
-
-## Timeline
-
-- **Weeks 1-4:** Hardware setup & core infrastructure
-- **Weeks 5-8:** AI integration (YOLO + Face Recognition)
-- **Weeks 9-12:** Automation & alert system
-- **Weeks 13-14:** Web app & cloud deployment
-- **Weeks 15-16:** Testing & documentation
-
-## Security Features
-
-- All data stored locally (no cloud required)
-- Encrypted biometric storage
-- Secure API endpoints
-- Audit logging for all events
+|---|---|---|
+| Christian | Electrical Engineer | Hardware, power, sensors |
+| Giovanny | Computer Engineer | AI/ML, detection, federated learning |
+| Mohammed | Computer Engineer | Backend, API, cloud |
+| Saifeddine (Adam) | Computer Science | Frontend, architecture, security audits |
 
 ---
 
 ## License
 
-**AGPL-3.0** — see [`LICENSE`](LICENSE).
+**AGPL-3.0**, see [`LICENSE`](LICENSE).
 
 ARGUS links Ultralytics and ships a third-party threat-detection model,
 both AGPL-3.0. AGPL's network clause reaches ARGUS because it serves video
 over a network. Third-party models, datasets, and their terms are recorded
 in [`NOTICE.md`](NOTICE.md).
-
-Senior Design Project 2026.
-
----
-
