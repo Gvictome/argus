@@ -43,6 +43,7 @@ import psutil
 import pipeline as pl
 import profiles
 import workload
+import workload_fine
 from head import FederatedHead
 
 HERE = Path(__file__).resolve().parent
@@ -145,7 +146,12 @@ def main():
     ap.add_argument("--target-fps", type=float, default=12.0)
     ap.add_argument("--pipelined", action="store_true",
                     help="Overlap the accelerator with the CPU path")
-    ap.add_argument("--site", default="driveway", choices=list(workload.SITES))
+    ap.add_argument("--site", default="driveway",
+                    choices=sorted(set(workload.SITES) | set(workload_fine.SITES)))
+    ap.add_argument("--taxonomy", choices=("coarse", "fine"), default="coarse",
+                    help="fine adds carrier / make / package size from a crop classifier")
+    ap.add_argument("--classifier-acc", type=float, default=0.88,
+                    help="simulated crop classifier accuracy (fine taxonomy only)")
     ap.add_argument("--rounds", type=int, default=5)
     ap.add_argument("--clients", type=int, default=1)
     ap.add_argument("--epochs", type=int, default=12)
@@ -170,8 +176,10 @@ def main():
     prof = profiles.get(args.profile)
     unit = pl.calibrate()
 
-    site = workload.SITES[args.site]
-    Xf, yf = workload.generate(site, 4000, seed=99)
+    if args.site not in workload_fine.site_keys(args.taxonomy):
+        raise SystemExit(f"site {args.site!r} needs --taxonomy fine")
+    Xf, yf, site, n_features = workload_fine.load_site(
+        args.site, 4000, 99, args.taxonomy, args.classifier_acc)
     cursor = {"i": 0}
 
     def feed():
@@ -179,14 +187,17 @@ def main():
         cursor["i"] += 1
         return Xf[i], yf[i]
 
-    head = FederatedHead(seed=0)
+    head = FederatedHead(seed=0, n_features=n_features)
     metrics = Metrics(args.port)
 
     print()
     print("=" * 74)
     print(f"  ARGUS node simulator  |  profile: {prof.label}")
     print("=" * 74)
-    print(f"  site            {site.key} -- {site.label}")
+    base = getattr(site, "base", site)
+    print(f"  site            {base.key} -- {base.label}")
+    print(f"  taxonomy        {args.taxonomy} ({n_features} features"
+          + (f", crop classifier acc {args.classifier_acc:.2f})" if args.taxonomy == "fine" else ")"))
     print(f"  head            {head.n_params:,} params (CON-3 bound ~200K)")
     print(f"  mode            {'pipelined' if args.pipelined else 'serial (Table 11)'}")
     print(f"  target          {args.target_fps:.0f} FPS")
@@ -232,14 +243,16 @@ def main():
     )
     p.run(2.0, on_tick)   # keep detecting while the server binds
     clients = []
-    sites = list(workload.SITES)
+    sites = workload_fine.site_keys(args.taxonomy)
     for i in range(args.clients):
         clients.append(subprocess.Popen(
             [py, str(HERE / "fl.py"), "client",
              "--site", sites[i % len(sites)],
              "--samples", str(args.samples),
              "--epochs", str(args.epochs),
-             "--seed", str(i + 1)],
+             "--seed", str(i + 1),
+             "--taxonomy", args.taxonomy,
+             "--classifier-acc", str(args.classifier_acc)],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         ))
     for proc in [server] + clients:

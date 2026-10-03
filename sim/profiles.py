@@ -72,6 +72,25 @@ PROFILES = {
         ),
         note="The target build. CPU path 27 ms, accelerator path 40 ms.",
     ),
+    # Fine taxonomy: a second-stage crop classifier (carrier / make / package
+    # size) runs on each vehicle or package box. No such model is compiled
+    # yet, so its line is a budget, not a measurement: ~3 ms per crop on the
+    # Hailo, two crops per frame on a busy street.
+    "pi5-hailo-fine": NodeProfile(
+        key="pi5-hailo-fine",
+        label="Pi 5 + AI HAT+ 2, threat + crop classifier on Hailo",
+        cores=4,
+        stages=(
+            Stage("capture", 8.0, "cpu", _TABLE_11),
+            Stage("yolo", 28.0, "accel", _TABLE_11),
+            Stage("threat", 12.0, "accel", "HAILO_PIPELINE.md sec 3 (est. once compiled)"),
+            Stage("crop", 6.0, "accel", "budget estimate, unmeasured: 2 crops x ~3 ms"),
+            Stage("sort", 4.0, "cpu", _TABLE_11),
+            Stage("head", 0.0, "measured", "timed live"),
+            Stage("encode", 15.0, "cpu", _TABLE_11),
+        ),
+        note="pi5-hailo plus the fine-taxonomy crop stage. Accelerator path 46 ms.",
+    ),
     # The risk case flagged in review: Table 11 has no threat line, and
     # HAILO_PIPELINE.md sec 3 warns an uncompiled threat model is
     # "a second CPU YOLO pass at ~36 ms/frame".

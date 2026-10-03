@@ -113,7 +113,20 @@ def generate(
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Return (X[n, 19] float32, y[n] int64) for one site."""
     rng = np.random.default_rng(seed)
+    ev = sample_events(site, n, rng, night_rate)
+    y = np.where(anomaly_mask(site, ev), 4, ev["cls"]).astype(np.int64)
+    y = add_label_noise(y, rng, label_noise)
+    return assemble(ev), y
 
+
+def sample_events(site: Site, n: int, rng: np.random.Generator,
+                  night_rate: float = 0.12) -> Dict[str, np.ndarray]:
+    """Draw the raw per-event quantities the feature vector is built from.
+
+    The draw order is fixed: the coarse output for a given seed is pinned by
+    tests/test_sim_fine_taxonomy.py because src/federated/features.py
+    mirrors it.
+    """
     cls = rng.choice(4, size=n, p=np.asarray(site.class_prior))
     hour = rng.choice(24, size=n, p=_hour_weights(site.active_hours, night_rate))
     weekday = rng.integers(0, 7, size=n)
@@ -125,7 +138,6 @@ def generate(
     h = np.clip(base_h * rng.lognormal(0.0, 0.28, n), 0.01, 1.0)
     cx = np.clip(rng.normal(0.5, 0.22, n), 0.0, 1.0)
     cy = np.clip(rng.normal(0.58, 0.16, n), 0.0, 1.0)
-    aspect = w / np.maximum(h, 1e-3)
 
     # Dynamics: vehicles move fast and linger briefly, animals dart, packages
     # are static once dropped.
@@ -140,38 +152,53 @@ def generate(
 
     conf = np.clip(rng.beta(7.0, 2.2, n), 0.0, 1.0)
 
-    # ---- site-specific normalcy rule -------------------------------------
+    return {
+        "cls": cls, "hour": hour, "weekday": weekday,
+        "w": w, "h": h, "cx": cx, "cy": cy,
+        "vx": vx, "vy": vy, "speed": speed, "dwell": dwell, "conf": conf,
+    }
+
+
+def anomaly_mask(site: Site, ev: Dict[str, np.ndarray]) -> np.ndarray:
+    """The site-specific normalcy rule on the coarse class alone."""
+    cls, hour, dwell = ev["cls"], ev["hour"], ev["dwell"]
     start, end = site.active_hours
     off_hours = (hour < start) | (hour >= end)
-    forbidden = np.zeros(n, dtype=bool)
+    forbidden = np.zeros(len(cls), dtype=bool)
     for name in site.anomalous_classes:
         forbidden |= cls == CLASS_NAMES.index(name)
     # Loitering applies to things that are supposed to move on. A package
     # sitting where it was dropped is the normal case, not an anomaly.
     loitering = (dwell > site.dwell_limit) & (cls != 3)
+    return forbidden | (off_hours & (cls != 2)) | loitering
 
-    is_anomaly = forbidden | (off_hours & (cls != 2)) | loitering
 
-    y = np.where(is_anomaly, 4, cls).astype(np.int64)
-
-    # A little label noise so nothing hits a suspicious 1.000.
-    flip = rng.random(n) < label_noise
+def add_label_noise(y: np.ndarray, rng: np.random.Generator,
+                    label_noise: float) -> np.ndarray:
+    """A little label noise so nothing hits a suspicious 1.000."""
+    y = y.copy()
+    flip = rng.random(len(y)) < label_noise
     y[flip] = rng.integers(0, N_CLASSES, size=int(flip.sum()))
+    return y
 
+
+def assemble(ev: Dict[str, np.ndarray]) -> np.ndarray:
+    """Pack sampled events into the 19-dim layout documented above."""
+    n = len(ev["cls"])
+    w, h = ev["w"], ev["h"]
+    aspect = w / np.maximum(h, 1e-3)
     onehot = np.zeros((n, 4), dtype=np.float64)
-    onehot[np.arange(n), cls] = 1.0
-    ang_h = 2 * np.pi * hour / 24.0
-    ang_d = 2 * np.pi * weekday / 7.0
+    onehot[np.arange(n), ev["cls"]] = 1.0
+    ang_h = 2 * np.pi * ev["hour"] / 24.0
+    ang_d = 2 * np.pi * ev["weekday"] / 7.0
 
-    X = np.column_stack([
+    return np.column_stack([
         onehot,
-        w, h, np.sqrt(w * h), np.clip(aspect, 0, 6) / 6.0, cx, cy,
-        np.tanh(vx), np.tanh(vy), np.tanh(speed), dwell,
+        w, h, np.sqrt(w * h), np.clip(aspect, 0, 6) / 6.0, ev["cx"], ev["cy"],
+        np.tanh(ev["vx"]), np.tanh(ev["vy"]), np.tanh(ev["speed"]), ev["dwell"],
         np.sin(ang_h), np.cos(ang_h), np.sin(ang_d), np.cos(ang_d),
-        conf,
+        ev["conf"],
     ]).astype(np.float32)
-
-    return X, y
 
 
 def split(X: np.ndarray, y: np.ndarray, val_frac: float = 0.2, seed: int = 0):

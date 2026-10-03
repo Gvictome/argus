@@ -33,6 +33,7 @@ import flwr as fl
 
 import workload
 from head import FederatedHead
+from workload_fine import load_site
 
 EVENTS = Path(__file__).resolve().parent / "_run" / "fl_events.jsonl"
 
@@ -47,11 +48,12 @@ def emit(**kw):
 class ArgusHeadClient(fl.client.NumPyClient):
     """Mirrors src/federated/client.py, with the head in place of YOLO."""
 
-    def __init__(self, site_key, samples, epochs, seed):
-        self.site = workload.SITES[site_key]
-        X, y = workload.generate(self.site, samples, seed=seed)
+    def __init__(self, site_key, samples, epochs, seed,
+                 taxonomy="coarse", classifier_acc=0.88):
+        X, y, self.site, n_features = load_site(site_key, samples, seed,
+                                                taxonomy, classifier_acc)
         self.Xt, self.yt, self.Xv, self.yv = workload.split(X, y, seed=seed)
-        self.head = FederatedHead(seed=0)
+        self.head = FederatedHead(seed=0, n_features=n_features)
         self.epochs = epochs
         emit(kind="client_ready", site=site_key, train=len(self.Xt),
              val=len(self.Xv), params=self.head.n_params)
@@ -117,7 +119,8 @@ def serve(args):
 
 
 def client(args):
-    c = ArgusHeadClient(args.site, args.samples, args.epochs, args.seed)
+    c = ArgusHeadClient(args.site, args.samples, args.epochs, args.seed,
+                        args.taxonomy, args.classifier_acc)
     fl.client.start_client(server_address=args.address, client=c.to_client())
     emit(kind="client_done", site=args.site)
 
@@ -135,5 +138,8 @@ if __name__ == "__main__":
     c.add_argument("--epochs", type=int, default=4)
     c.add_argument("--seed", type=int, default=1)
     c.add_argument("--address", default="127.0.0.1:8080")
+    c.add_argument("--taxonomy", choices=("coarse", "fine"), default="coarse")
+    c.add_argument("--classifier-acc", type=float, default=0.88,
+                   help="simulated crop classifier accuracy (fine taxonomy only)")
     a = p.parse_args()
     (serve if a.cmd == "serve" else client)(a)
