@@ -25,8 +25,14 @@ Branch `feat/fine-taxonomy` (commits `a9234ed`, `aa6faae`). Status as of
 - **Sponsor finding.** Local-only training beat FedAvg in every run. One
   shared model cannot learn that each site's household drives different
   cars. Per-site fine-tuning after FedAvg is needed.
-- **Real model.** The make classifier is training on Stanford Cars on CPU.
-  Validation accuracy reached 0.720 at epoch 6 of 12.
+- **Real model.** The make classifier is trained (Stanford Cars, CPU, 12
+  epochs, about 55 minutes). Test accuracy is 0.832 over 49 makes and
+  0.917 after collapsing to the 7 ARGUS slots; on the six tracked makes
+  alone, recall is 0.71 to 0.85 (about 0.76 weighted). Plugged back into
+  the sim at 0.76, FedAvg balanced accuracy still rises from 0.860 to
+  0.894.
+- **Speed.** One crop takes 15.8 ms on the x86 dev CPU. A Pi CPU is
+  several times slower, so the crop stage has to run on the Hailo.
 
 ## 2. Datasets
 
@@ -43,7 +49,7 @@ Derived from it:
 | Folder | Contents |
 |---|---|
 | `D:\argus-data\crops\make` | 7,330 train / 813 val / 8,040 test images, resized to a 256 px short side, one folder per make (467 MB) |
-| `D:\argus-data\models\crop_make` | `model.pt` (best checkpoint so far); `metrics.json` and `model.onnx` are written when training ends |
+| `D:\argus-data\models\crop_make` | `model.pt` (trained make classifier, 17 MB), `model.onnx` (for the Hailo compiler), `metrics.json` (test accuracy, per-epoch history, 49 x 49 confusion matrix) |
 | `D:\argus-data\train_make.log` | Training log |
 
 The 49 makes include all six ARGUS tracks (Nissan, Toyota, Honda, Ford,
@@ -209,11 +215,49 @@ sampling, label smoothing 0.1, 12 epochs, CPU only (12 threads, about
 | 4 | 1.178 | 0.579 |
 | 5 | 1.009 | 0.684 |
 | 6 | 0.940 | 0.720 |
+| 7 | 0.896 | 0.770 |
+| 8 | 0.857 | 0.786 |
+| 9 | 0.827 | 0.813 |
+| 10 | 0.812 | 0.824 |
+| 11 | 0.808 | 0.824 |
+| 12 | 0.805 | 0.827 |
 
-Still running. Final test accuracy on 8,040 images, and the accuracy
-after collapsing to the 7 ARGUS slots, land in `metrics.json` when it
-finishes. That collapsed number is the one to feed back into
-`compare_taxonomy.py --acc`.
+**Test set (8,040 images).**
+
+| Measure | Value |
+|---|---|
+| Accuracy, 49 makes | 0.832 |
+| Accuracy, 7 ARGUS slots | 0.917 |
+| Weighted recall, six tracked makes | about 0.76 |
+
+| ARGUS slot | Test images | Recall |
+|---|---|---|
+| other (43 makes) | 6,100 | 0.966 |
+| honda | 160 | 0.850 |
+| tesla | 38 | 0.842 |
+| ford | 514 | 0.825 |
+| nissan | 170 | 0.771 |
+| toyota | 164 | 0.744 |
+| chevrolet | 894 | 0.709 |
+
+The 0.917 is flattered by "other", which is 76% of the test set and easy
+to get right. The tracked makes, the ones the rules depend on, sit at
+about 0.76. These are Stanford Cars photos at eye level, so expect lower
+on a downward-looking ARGUS camera until real footage is added.
+
+**Fed back into the sim** (`compare_taxonomy.py --acc 0.92,0.76`):
+
+| Classifier acc | Training | Balanced acc, coarse to fine | Subtype-decided, coarse to fine |
+|---|---|---|---|
+| 0.92 | FedAvg | 0.860 to 0.909 | 0.400 to 0.616 |
+| 0.92 | Local | 0.921 to 0.952 | 0.407 to 0.672 |
+| 0.76 | FedAvg | 0.860 to 0.894 | 0.400 to 0.518 |
+| 0.76 | Local | 0.921 to 0.933 | 0.407 to 0.548 |
+
+**Runtime check.** `CropClassifier.from_dir` loads the model and labels
+real test crops; one crop takes 15.8 ms on the x86 dev CPU (4 threads).
+On a Pi CPU that would be several times slower, well past the 6 ms the
+`pi5-hailo-fine` profile budgets for the Hailo.
 
 ## 7. How to run the sims
 
@@ -260,6 +304,7 @@ python -m pytest tests/test_sim_fine_taxonomy.py tests/test_crop_training.py tes
 ```
 python training/crop/prepare_stanford_cars.py --out D:/argus-data/crops/make
 python training/crop/train.py --task make --data D:/argus-data/crops/make --out D:/argus-data/models/crop_make
+python training/crop/train.py --out D:/argus-data/models/crop_make --export-only   # re-export ONNX only
 python training/crop/prepare_roboflow.py --task carrier --src D:/argus-data/roboflow/usps-merge --out D:/argus-data/crops/carrier
 python training/crop/train.py --task carrier --data D:/argus-data/crops/carrier --out D:/argus-data/models/crop_carrier
 ```

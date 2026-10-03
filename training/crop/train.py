@@ -73,6 +73,40 @@ def build(n_classes: int) -> nn.Module:
     return net
 
 
+def export_onnx(net: nn.Module, path: Path) -> bool:
+    """Write model.onnx for the Hailo compile step.
+
+    A failure here is reported, not raised: model.pt and metrics.json are
+    already on disk, and an hour of training must not hinge on the onnx
+    package being installed. Re-run with --export-only once it is.
+    """
+    net.eval()
+    try:
+        torch.onnx.export(net, torch.randn(1, 3, IMG, IMG), path,
+                          input_names=["image"], output_names=["logits"],
+                          opset_version=13, dynamo=False)
+    except Exception as exc:
+        print(f"  ONNX export failed ({exc}); model.pt is saved. "
+              f"pip install onnx, then rerun with --export-only")
+        return False
+    print(f"  wrote {path}")
+    return True
+
+
+def load_checkpoint(path: Path) -> nn.Module:
+    ckpt = torch.load(path, map_location="cpu")
+    net = build_bare(len(ckpt["classes"]))
+    net.load_state_dict(ckpt["state_dict"])
+    return net
+
+
+def build_bare(n_classes: int) -> nn.Module:
+    """Same architecture as build(), without downloading ImageNet weights."""
+    net = models.mobilenet_v3_large(weights=None)
+    net.classifier[-1] = nn.Linear(net.classifier[-1].in_features, n_classes)
+    return net
+
+
 @torch.no_grad()
 def predict(net: nn.Module, loader: DataLoader):
     net.eval()
@@ -85,8 +119,10 @@ def predict(net: nn.Module, loader: DataLoader):
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data", type=Path, required=True)
+    ap.add_argument("--data", type=Path)
     ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--export-only", action="store_true",
+                    help="skip training; export <out>/model.pt to model.onnx")
     ap.add_argument("--epochs", type=int, default=10)
     ap.add_argument("--batch", type=int, default=64)
     ap.add_argument("--lr", type=float, default=1e-3)
@@ -94,6 +130,12 @@ def main() -> None:
     ap.add_argument("--threads", type=int, default=os.cpu_count() or 4)
     ap.add_argument("--task", choices=("make", "carrier", "size"), default="make")
     args = ap.parse_args()
+
+    if args.export_only:
+        ok = export_onnx(load_checkpoint(args.out / "model.pt"), args.out / "model.onnx")
+        raise SystemExit(0 if ok else 1)
+    if args.data is None:
+        ap.error("--data is required unless --export-only")
 
     torch.set_num_threads(args.threads)
     torch.manual_seed(0)
@@ -152,10 +194,7 @@ def main() -> None:
     metrics["confusion"] = confusion
     (args.out / "metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
 
-    net.eval()
-    torch.onnx.export(net, torch.randn(1, 3, IMG, IMG), args.out / "model.onnx",
-                      input_names=["image"], output_names=["logits"], opset_version=13,
-                      dynamo=False)
+    export_onnx(net, args.out / "model.onnx")
     line = f"  test acc {test_acc:.3f}"
     if "test_acc_argus_slots" in metrics:
         line += f"  (ARGUS 7-slot {metrics['test_acc_argus_slots']:.3f})"
