@@ -1,5 +1,7 @@
 # ARGUS documentation
 
+**Lost? Start at [operations/ACCESS_MAP.md](operations/ACCESS_MAP.md):** machines, URLs, where data lives, where simulations run, and how the parts talk.
+
 Markdown here is the source of truth; `docs/pdf/` holds rendered copies
 (`python scripts/build_docs_pdf.py`, `--master`, `--guides`).
 
@@ -7,10 +9,10 @@ Markdown here is the source of truth; `docs/pdf/` holds rendered copies
 |---|---|---|
 | [reference/](reference/) | The technical reference, ten sections, current. The master PDF is built from it | [01-system-overview.md](reference/01-system-overview.md) |
 | [guides/](guides/) | Eight plain-language guides, one topic each | [01-what-is-argus.md](guides/01-what-is-argus.md) |
-| [operations/](operations/) | Running it: quick start, demo runbook, production FL, Hailo, tunnel, hardware | [QUICKSTART.md](operations/QUICKSTART.md) |
+| [operations/](operations/) | Running it: where everything is, quick start, demo runbook, production FL, Hailo, tunnel, hardware | [ACCESS_MAP.md](operations/ACCESS_MAP.md) |
 | [design/](design/) | How the parts are designed and measured: overview, subsystems, federated architecture, threat stage | [OVERVIEW.md](design/OVERVIEW.md) |
 | [research/](research/) | Experiments and data: dataset plan, simulations, detector and threat evaluations | [datasets.md](research/datasets.md) |
-| [project/](project/) | Proposal, showcase PRD, sprint plan, demo script | [PROPOSAL.md](project/PROPOSAL.md) |
+| [project/](project/) | Proposal, showcase PRD, sprint plan, demo script, daily reports in `reports/` | [reports/](project/reports/) |
 | [archive/](archive/) | January-era design docs and the Prometheus voice tool. Kept for history; the reference wins where they disagree | |
 
 ## Research
