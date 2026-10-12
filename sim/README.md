@@ -6,7 +6,7 @@ round does to the frame rate.
 
 ```bash
 python sim/run_node.py                                    # one node, 12 FPS
-python sim/run_node.py --clients 3 --rounds 6             # real FedAvg
+python sim/run_node.py --clients 3 --rounds 6             # real Flower rounds, robust aggregation
 python sim/run_node.py --profile pi5-threat-on-cpu        # the risk case
 python sim/run_node.py --pipelined                        # overlap the Hailo
 python sim/run_node.py --cores 4                          # match Pi core count

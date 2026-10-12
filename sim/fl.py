@@ -7,6 +7,7 @@ Separate processes mean the trainer competes with the detection loop for
 cores through the OS scheduler, which is the contention being measured.
 
     python sim/fl.py serve  --rounds 5 --clients 1
+    python sim/fl.py serve  --rounds 5 --clients 3 --aggregation fedavg
     python sim/fl.py client --site driveway --epochs 4
 """
 
@@ -28,11 +29,13 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import flwr as fl
 
 import workload
 from head import FederatedHead
+from src.federated.robust_strategy import AGGREGATIONS, RobustFedAvg
 
 EVENTS = Path(__file__).resolve().parent / "_run" / "fl_events.jsonl"
 
@@ -95,13 +98,19 @@ def _agg(metrics):
 
 
 def serve(args):
-    strategy = fl.server.strategy.FedAvg(
+    def report(server_round, rep):
+        emit(kind="aggregation", round=server_round, **rep.as_dict())
+
+    strategy = RobustFedAvg(
+        aggregation=args.aggregation,
+        on_report=report,
         min_fit_clients=args.clients,
         min_evaluate_clients=args.clients,
         min_available_clients=args.clients,
         evaluate_metrics_aggregation_fn=_agg,
     )
-    emit(kind="server_start", rounds=args.rounds, clients=args.clients)
+    emit(kind="server_start", rounds=args.rounds, clients=args.clients,
+         aggregation=args.aggregation)
     hist = fl.server.start_server(
         server_address=args.address,
         config=fl.server.ServerConfig(num_rounds=args.rounds),
@@ -129,6 +138,8 @@ if __name__ == "__main__":
     s.add_argument("--rounds", type=int, default=5)
     s.add_argument("--clients", type=int, default=1)
     s.add_argument("--address", default="127.0.0.1:8080")
+    s.add_argument("--aggregation", choices=AGGREGATIONS, default="robust",
+                   help="robust screens updates first; fedavg is the unscreened baseline")
     c = sub.add_parser("client")
     c.add_argument("--site", default="driveway")
     c.add_argument("--samples", type=int, default=6000)

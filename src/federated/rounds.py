@@ -54,15 +54,22 @@ def _rounds_completed(run_dir: Path) -> int:
 def run_round_blocking(app, server: Optional[str] = None, epochs: int = 6,
                        tolerance: float = 0.01, min_samples: int = 200,
                        timeout_s: float = 1800.0) -> dict:
-    """Join one round and gate the result. Blocks; call it off the event loop."""
+    """Join one round and gate the result. Blocks; call it off the event loop.
+
+    The result carries `completed`: True once a global model came back and
+    went through the gate (accepted or not), False when the round never
+    happened -- aggregator unreachable, timed out, too few labels. The
+    scheduler retries only the second kind.
+    """
     store = getattr(app.state, "fl_store", None)
     head = getattr(app.state, "fl_head", None)
     if store is None or head is None:
-        return {"accepted": False, "reason": "federated head not initialised"}
+        return {"accepted": False, "completed": False,
+                "reason": "federated head not initialised"}
 
     X, _ = store.labelled()
     if len(X) < min_samples:
-        return {"accepted": False,
+        return {"accepted": False, "completed": False,
                 "reason": f"only {len(X)} labelled samples, need {min_samples}"}
 
     server = server or settings.FL_SERVER_URL
@@ -87,7 +94,8 @@ def run_round_blocking(app, server: Optional[str] = None, epochs: int = 6,
         proc = subprocess.run(cmd, cwd=str(BASE_DIR), capture_output=True,
                               text=True, timeout=timeout_s)
     except subprocess.TimeoutExpired:
-        return {"accepted": False, "reason": f"round timed out after {timeout_s:.0f}s",
+        return {"accepted": False, "completed": False,
+                "reason": f"round timed out after {timeout_s:.0f}s",
                 "run_dir": str(run_dir)}
 
     candidate = run_dir / "global.npz"
@@ -98,6 +106,7 @@ def run_round_blocking(app, server: Optional[str] = None, epochs: int = 6,
         logger.warning("FL round did not complete (exit %s)", proc.returncode)
         return {
             "accepted": False,
+            "completed": False,
             "exit_code": proc.returncode,
             "rounds": rounds,
             "reason": ("could not reach the aggregator or it sent no model"
@@ -110,5 +119,8 @@ def run_round_blocking(app, server: Optional[str] = None, epochs: int = 6,
         app, candidate, "federated", tolerance,
         {"rounds": rounds, "run_dir": str(run_dir), "server": server},
     )
+    # The round happened whether or not the gate took the model: a rejection
+    # is a result, and it should not be retried every hour until accepted.
+    decision["completed"] = True
     logger.info("FL round finished: accepted=%s rounds=%d", decision.get("accepted"), rounds)
     return decision

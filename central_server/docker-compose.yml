@@ -20,7 +20,9 @@ version: "3.8"
 
 services:
   fl-aggregator:
-    build: .
+    build:
+      context: ..
+      dockerfile: central_server/Dockerfile
     container_name: argus-fl-aggregator
     ports:
       - "8080:8080"   # Flower gRPC (FL clients connect here)
@@ -32,6 +34,7 @@ services:
       - ARGUS_AUTH_TOKEN=${ARGUS_AUTH_TOKEN:-}
       - ARGUS_MIN_CLIENTS=${ARGUS_MIN_CLIENTS:-1}
       - ARGUS_ROUNDS=${ARGUS_ROUNDS:-50}
+      - ARGUS_AGGREGATION=${ARGUS_AGGREGATION:-robust}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8090/api/status"]

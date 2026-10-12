@@ -1,0 +1,7 @@
+# The build context is the repo root; send only what the image copies.
+*
+!central_server/requirements.txt
+!central_server/fl_aggregator.py
+!central_server/central_config.json
+!src/federated/robust.py
+!src/federated/robust_strategy.py

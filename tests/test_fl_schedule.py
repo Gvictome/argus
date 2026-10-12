@@ -236,6 +236,32 @@ class TestRoundOutcome:
         assert scheduler._last_round_at is None, "a failed round advanced the schedule"
 
     @pytest.mark.asyncio
+    async def test_an_unreachable_aggregator_through_the_real_runner_is_retried(self, tmp_path):
+        """
+        run_round_blocking reports an unreachable server as a result dict,
+        not an exception. Through the real runner path that must still count
+        as a failure, or the node waits two weeks to try again.
+        """
+        config = _Config()
+        s = FLScheduler(_Client(config), config, state_path=tmp_path / "fl_state.json",
+                        runner=lambda: {"accepted": False, "completed": False,
+                                        "reason": "could not reach the aggregator"})
+
+        assert await s.run_round() is False
+        assert s._last_round_at is None
+
+    @pytest.mark.asyncio
+    async def test_a_gate_rejection_still_counts_as_a_round(self, tmp_path):
+        """A rejected model is a result; retrying hourly would not change it."""
+        config = _Config()
+        s = FLScheduler(_Client(config), config, state_path=tmp_path / "fl_state.json",
+                        runner=lambda: {"accepted": False, "completed": True,
+                                        "reason": "regressed"})
+
+        assert await s.run_round() is True
+        assert s._last_round_at is not None
+
+    @pytest.mark.asyncio
     async def test_a_successful_round_advances_the_schedule(self, scheduler, monkeypatch):
         monkeypatch.setattr(scheduler, "_blocking_fl_round", lambda: None)
 

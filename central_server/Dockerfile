@@ -2,11 +2,14 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-COPY requirements.txt .
+# Built from the repo root (see docker-compose.yml) so the robust
+# aggregation code can come from src/federated rather than a copy.
+COPY central_server/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY fl_aggregator.py .
-COPY central_config.json .
+COPY central_server/fl_aggregator.py .
+COPY central_server/central_config.json .
+COPY src/federated/robust.py src/federated/robust_strategy.py ./
 
 RUN mkdir -p /data/checkpoints
 

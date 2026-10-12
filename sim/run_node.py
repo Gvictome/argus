@@ -302,7 +302,7 @@ def report(args, prof, p, marks, head):
 
     print()
     print("=" * 74)
-    print("  FEDERATED ROUNDS (Flower FedAvg over gRPC)")
+    print("  FEDERATED ROUNDS (Flower over gRPC, robust aggregation)")
     print("=" * 74)
     evals = [e for e in ev if e["kind"] == "evaluate"]
     fits = [e for e in ev if e["kind"] == "fit"]

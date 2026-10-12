@@ -18,13 +18,18 @@
 
 .EXAMPLE
   .\scripts\run_central_server.ps1 -Rounds 3 -MinClients 2
+
+.EXAMPLE
+  .\scripts\run_central_server.ps1 -Aggregation fedavg   # unscreened baseline
 #>
 param(
   [int]$Rounds = 5,
   [int]$MinClients = 1,
   [int]$FlPort = 8080,
   [int]$ApiPort = 8090,
-  [string]$Token = ""
+  [string]$Token = "",
+  [ValidateSet("robust", "fedavg")]
+  [string]$Aggregation = "robust"
 )
 
 $ErrorActionPreference = "Stop"
@@ -38,6 +43,7 @@ $env:ARGUS_FL_ADDRESS = "0.0.0.0:${FlPort}"
 $env:ARGUS_MIN_CLIENTS = "$MinClients"
 $env:ARGUS_ROUNDS = "$Rounds"
 $env:ARGUS_SERVE_FOREVER = "true"
+$env:ARGUS_AGGREGATION = $Aggregation
 if ($Token) { $env:ARGUS_AUTH_TOKEN = $Token }
 
 # The Pi needs to reach this machine, so show the address it should use.
@@ -49,6 +55,7 @@ Write-Host ""
 Write-Host "ARGUS central server" -ForegroundColor Cyan
 Write-Host "  rounds per session : $Rounds"
 Write-Host "  clients per round  : $MinClients"
+Write-Host "  aggregation        : $Aggregation"
 Write-Host "  checkpoints        : central_server\checkpoints"
 Write-Host ""
 Write-Host "On the PI, point the node at this machine:" -ForegroundColor Yellow

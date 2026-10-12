@@ -252,6 +252,12 @@ class FLScheduler:
             if isinstance(result, dict):
                 logger.info("Scheduled round: accepted=%s %s",
                             result.get("accepted"), result.get("reason", ""))
+                # run_round_blocking reports an unreachable aggregator as a
+                # result rather than an exception. Treated as success, it
+                # recorded the round as done and pushed the retry fourteen
+                # days out -- the opposite of what run_round promises.
+                if result.get("completed") is False:
+                    raise RuntimeError(result.get("reason") or "round did not complete")
             return
         from src.federated.client import start_client
         start_client(self.config.FL_SERVER_URL, self.client)

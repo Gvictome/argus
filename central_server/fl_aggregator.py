@@ -2,7 +2,7 @@
 Argus Central FL Aggregation Server
 =====================================
 Runs the Flower federated learning server with:
-  - FedAvg aggregation strategy
+  - Robust aggregation (src/federated/robust.py) with plain FedAvg as a switch
   - Per-round epoch evaluation and metrics logging
   - Model checkpointing and versioning
   - REST API for monitoring training progress
@@ -55,6 +55,9 @@ DEFAULT_CONFIG = {
     "checkpoint_dir": os.path.join(os.path.dirname(__file__), "checkpoints"),
     "auth_token": "",  # Set via env ARGUS_AUTH_TOKEN or config
     "node_scrape_targets": [],  # List of "host:port" for Prometheus federation
+    # "robust" screens updates before averaging; "fedavg" is the unscreened
+    # baseline, kept so the comparison study runs both through this server.
+    "aggregation": "robust",
 }
 
 
@@ -72,6 +75,8 @@ def load_config() -> dict:
         cfg["min_clients"] = int(os.environ["ARGUS_MIN_CLIENTS"])
     if os.environ.get("ARGUS_ROUNDS"):
         cfg["rounds"] = int(os.environ["ARGUS_ROUNDS"])
+    if os.environ.get("ARGUS_AGGREGATION"):
+        cfg["aggregation"] = os.environ["ARGUS_AGGREGATION"]
     return cfg
 
 
@@ -115,6 +120,10 @@ FL_CHECKPOINT_TOTAL = Counter(
 )
 FL_TOTAL_ROUNDS = Counter(
     "argus_fl_rounds_total", "Total FL rounds completed"
+)
+FL_REJECTED_UPDATES = Counter(
+    "argus_fl_rejected_updates_total", "Client updates rejected by robust screening",
+    ["node_id"],
 )
 SERVER_INFO = Info("argus_central", "Central server information")
 SERVER_INFO.info({
@@ -203,6 +212,9 @@ class RoundResult:
     client_results: List[dict]
     duration_seconds: float
     model_version: int
+    # What robust screening decided this round: who was kept, who was
+    # dropped and why. None when the server runs plain FedAvg.
+    aggregation: Optional[dict] = None
 
 
 class TrainingHistory:
@@ -266,6 +278,27 @@ def save_checkpoint(weights: List[np.ndarray], round_num: int, metrics: dict):
     return str(path)
 
 
+def resume_model_version(latest: int = 0) -> int:
+    """Continue the version counter from what is already on disk.
+
+    The counter lives in memory, so without this a restarted server
+    counted from v1 again: its first checkpoint was named exactly like the
+    previous run's round-1 file and silently replaced it, and two different
+    models answered to the same version number.
+    """
+    global _model_version
+    highest = latest
+    for f in checkpoint_dir.glob("model_round_*_v*.npz"):
+        try:
+            highest = max(highest, int(f.stem.rsplit("_v", 1)[1]))
+        except (IndexError, ValueError):
+            continue
+    if highest > _model_version:
+        _model_version = highest
+        FL_MODEL_VERSION.set(_model_version)
+    return _model_version
+
+
 def load_latest_checkpoint() -> Optional[Tuple[List[np.ndarray], int]]:
     latest = checkpoint_dir / "model_latest.npz"
     if latest.exists():
@@ -290,12 +323,24 @@ def start_flower_server():
         logger.error("Flower not installed — run: pip install flwr")
         return
 
+    # From the repo the strategy imports as src.federated.robust_strategy;
+    # the container copies robust.py and robust_strategy.py next to this file.
+    repo_root = str(Path(__file__).resolve().parent.parent)
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+    try:
+        from src.federated.robust_strategy import RobustFedAvg
+    except ImportError:
+        from robust_strategy import RobustFedAvg
+
     # Load initial weights if checkpoint exists
     initial_params = None
+    resume_model_version()
     checkpoint = load_latest_checkpoint()
     if checkpoint:
         weights, ver = checkpoint
         initial_params = ndarrays_to_parameters(weights)
+        resume_model_version(ver)
         logger.info(f"Loaded checkpoint v{ver} as initial parameters")
 
     round_start_time = [0.0]
@@ -315,7 +360,8 @@ def start_flower_server():
     def evaluate_config(server_round: int):
         return {"server_round": server_round}
 
-    def on_fit_end(server_round, aggregated_parameters, aggregated_metrics, failures):
+    def on_fit_end(server_round, aggregated_parameters, aggregated_metrics, failures,
+                   report=None):
         """Called after fit aggregation — evaluate and checkpoint."""
         duration = time.time() - round_start_time[0]
         FL_ROUND_DURATION.observe(duration)
@@ -388,6 +434,7 @@ def start_flower_server():
             client_results=client_results,
             duration_seconds=duration,
             model_version=_model_version,
+            aggregation=report.as_dict() if report is not None else None,
         )
         history.add(result)
 
@@ -397,13 +444,23 @@ def start_flower_server():
             f"clients={len(client_results)}, time={duration:.1f}s"
         )
 
-    class ArgusStrategy(fl.server.strategy.FedAvg):
-        """FedAvg with per-round evaluation and checkpointing."""
+    class ArgusStrategy(RobustFedAvg):
+        """Robust aggregation with per-round evaluation and checkpointing.
+
+        When screening rejects every update, aggregate_fit returns no
+        parameters, so nothing is checkpointed and the global model stays
+        where it was.
+        """
 
         def aggregate_fit(self, server_round, results, failures):
+            self.last_report = None
             aggregated_parameters, aggregated_metrics = super().aggregate_fit(
                 server_round, results, failures
             )
+            report = self.last_report
+            if report is not None:
+                for node_id in report.rejected:
+                    FL_REJECTED_UPDATES.labels(node_id=node_id).inc()
             # Collect per-client metrics
             client_metrics = []
             for client_proxy, fit_res in results:
@@ -412,7 +469,7 @@ def start_flower_server():
                 )
             on_fit_end(
                 server_round, aggregated_parameters,
-                client_metrics, failures,
+                client_metrics, failures, report,
             )
             return aggregated_parameters, aggregated_metrics
 
@@ -426,10 +483,12 @@ def start_flower_server():
         total = sum(n for n, _ in metrics) or 1
         keys = set()
         for _, m in metrics:
-            keys |= {k for k, v in m.items() if isinstance(v, (int, float))}
+            keys |= {k for k, v in m.items()
+                     if isinstance(v, (int, float)) and not isinstance(v, bool)}
         return {k: sum(n * m.get(k, 0.0) for n, m in metrics) / total for k in keys}
 
     strategy_kwargs = {
+        "aggregation": config.get("aggregation", "robust"),
         "evaluate_metrics_aggregation_fn": _weighted,
         "fit_metrics_aggregation_fn": _weighted,
         "min_fit_clients": config["min_clients"],
@@ -445,7 +504,8 @@ def start_flower_server():
 
     logger.info(
         f"Starting Flower FL server on {config['fl_server_address']} "
-        f"(rounds={config['rounds']}, min_clients={config['min_clients']})"
+        f"(rounds={config['rounds']}, min_clients={config['min_clients']}, "
+        f"aggregation={strategy.aggregation})"
     )
     fl.server.start_server(
         server_address=config["fl_server_address"],
@@ -634,6 +694,7 @@ def main():
     logger.info(f"API Port:  {config['api_port']}")
     logger.info(f"Rounds:    {config['rounds']}")
     logger.info(f"Min Clients: {config['min_clients']}")
+    logger.info(f"Aggregation: {config.get('aggregation', 'robust')}")
     logger.info(f"Auth:      {'enabled' if config.get('auth_token') else 'disabled'}")
     logger.info("=" * 60)
 

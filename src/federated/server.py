@@ -6,13 +6,14 @@ multiple ARGUS nodes.
 """
 
 import flwr as fl
-from flwr.server.strategy import FedAvg
 
-def start_server(port: int = 8080, num_rounds: int = 3):
-    """Start the Flower server with FedAvg strategy."""
-    
-    # Initialize FedAvg strategy
-    strategy = FedAvg(
+from src.federated.robust_strategy import RobustFedAvg
+
+def start_server(port: int = 8080, num_rounds: int = 3, aggregation: str = "robust"):
+    """Start the Flower server, screening updates unless aggregation='fedavg'."""
+
+    strategy = RobustFedAvg(
+        aggregation=aggregation,
         fraction_fit=1.0,  # Sample all available nodes for training
         fraction_evaluate=0.5,  # Sample 50% for evaluation
         min_fit_clients=1,
@@ -20,7 +21,7 @@ def start_server(port: int = 8080, num_rounds: int = 3):
     )
 
     print(f"[*] ARGUS FL Server starting on port {port}...")
-    print(f"[*] Training for {num_rounds} rounds.")
+    print(f"[*] Training for {num_rounds} rounds, aggregation={aggregation}.")
 
     # Start the server
     fl.server.start_server(
