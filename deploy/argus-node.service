@@ -9,7 +9,7 @@
 #   sudo systemctl enable --now argus-node
 #   journalctl -u argus-node -f
 #
-# Paths assume the user `pi` and the repo at /home/pi/argus. Change User,
+# Paths assume the user `pi` and the repo at /home/viccia/argus. Change User,
 # WorkingDirectory, EnvironmentFile and ExecStart together if yours differ.
 
 [Unit]
@@ -19,10 +19,10 @@ After=network-online.target
 
 [Service]
 Type=simple
-User=pi
-WorkingDirectory=/home/pi/argus
-EnvironmentFile=/home/pi/argus/deploy/node.env
-ExecStart=/home/pi/argus/scripts/run_node.sh
+User=viccia
+WorkingDirectory=/home/viccia/argus
+EnvironmentFile=/home/viccia/argus/deploy/node.env
+ExecStart=/home/viccia/argus/scripts/run_node.sh
 Restart=on-failure
 RestartSec=10
 # The SD card was corrupted once by an unclean stop. Give the camera,

@@ -209,7 +209,7 @@ sudo systemctl enable --now argus-node
 journalctl -u argus-node -f
 ```
 
-The unit assumes user `pi` and the repo at `/home/pi/argus`. It restarts
+The unit assumes user `viccia` and the repo at `/home/viccia/argus` (the demo Pi). It restarts
 the node 10 seconds after a crash and gives it 45 seconds to stop cleanly,
 because an unclean stop already corrupted one SD card. `deploy/node.env`
 is git-ignored since it can hold a password.
