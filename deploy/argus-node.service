@@ -9,7 +9,7 @@
 #   sudo systemctl enable --now argus-node
 #   journalctl -u argus-node -f
 #
-# Paths assume the user `pi` and the repo at /home/viccia/argus. Change User,
+# Paths assume the user `viccia` and the repo at /home/viccia/argus. Change User,
 # WorkingDirectory, EnvironmentFile and ExecStart together if yours differ.
 
 [Unit]
