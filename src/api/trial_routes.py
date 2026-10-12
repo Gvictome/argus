@@ -100,7 +100,12 @@ async def bootstrap_samples(body: BootstrapRequest, request: Request):
     anything the camera actually saw.
     """
     st = _store(request)
-    n = st.bootstrap(body.site, int(body.n), int(body.seed))
+    try:
+        n = st.bootstrap(body.site, int(body.n), int(body.seed))
+    except KeyError as exc:
+        # An unknown site is the caller's typo, not a server fault, and a
+        # bare 500 does not say which sites exist.
+        raise HTTPException(400, str(exc).strip('"')) from exc
     return {"added": n, "synthetic": True, "stats": st.stats()}
 
 
@@ -120,6 +125,33 @@ async def head_status(request: Request):
         "last_metrics": _state["last_metrics"],
         "model": model_state.summary(request.app),
     }
+
+
+@router.get("/api/federated/head/versions", tags=["Federated"])
+async def head_versions(request: Request):
+    """Accepted versions archived on this node, newest first."""
+    _head(request)
+    return {"live": model_state.model_version(request.app),
+            "versions": model_state.list_versions(request.app)}
+
+
+class RollbackRequest(BaseModel):
+    label: str
+
+
+@router.post("/api/federated/head/rollback", tags=["Federated"])
+async def rollback_head(body: RollbackRequest, request: Request):
+    """Make an archived version live again. Recorded as a new version."""
+    _head(request)
+    proc = _state["round_proc"]
+    if proc is not None and proc.poll() is None:
+        # A round finishing mid-rollback would gate its candidate against
+        # whichever head happened to be live; make the operator wait.
+        raise HTTPException(409, "a round is running; roll back after it finishes")
+    try:
+        return await asyncio.to_thread(model_state.rollback, request.app, body.label)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc).strip('"')) from exc
 
 
 class TrainRequest(BaseModel):

@@ -11,9 +11,24 @@ samples, and replaces the live head only if balanced accuracy does not
 regress by more than `tolerance`. The first model is accepted outright,
 since there is nothing yet to protect.
 
+Balanced accuracy is coarse -- with four represented classes it moves in
+steps of 0.25, so two different models routinely score the same. When it
+is level, cross-entropy loss breaks the tie: a candidate whose loss is
+more than `loss_tolerance` worse than the live model's is rejected even
+though the headline metric did not move. Round 2 of 2026-09-20 is why --
+it was accepted at 0.75 vs 0.75 while its loss went 0.1941 -> 0.2529. A
+candidate that clearly improves balanced accuracy is taken regardless of
+loss; the tie-break only decides rounds that the headline metric cannot.
+
 Accepted weights are written to DATA_DIR/fl_head.npz and restored at
 startup, so an update survives a restart. Every decision, accepted or not,
 is kept in DATA_DIR/fl_model_state.json.
+
+Every accepted version is also archived as DATA_DIR/fl_models/<label>.npz
+(the newest MAX_ARCHIVED kept), so a bad update that got past the gate can
+be rolled back without waiting for the next round. A rollback is itself a
+new version (`rollback-rN`): the counter only moves forward, and the
+history shows what was restored and when.
 """
 
 from __future__ import annotations
@@ -33,6 +48,10 @@ logger = logging.getLogger(__name__)
 
 _LOCK = threading.Lock()
 
+# Archived versions kept on the node. Each head is under 1 MB, so this is
+# a cap on clutter, not on disk.
+MAX_ARCHIVED = 20
+
 
 def head_path() -> Path:
     return Path(settings.DATA_DIR) / "fl_head.npz"
@@ -40,6 +59,86 @@ def head_path() -> Path:
 
 def state_path() -> Path:
     return Path(settings.DATA_DIR) / "fl_model_state.json"
+
+
+def versions_dir() -> Path:
+    return Path(settings.DATA_DIR) / "fl_models"
+
+
+def _archive(head: FederatedHead, label: str) -> Path:
+    """Keep a copy of an accepted version, pruning the oldest past the cap."""
+    path = versions_dir() / f"{label}.npz"
+    head.save(path)
+    archived = sorted(versions_dir().glob("*.npz"), key=lambda q: q.stat().st_mtime)
+    for old in archived[:-MAX_ARCHIVED]:
+        try:
+            old.unlink()
+        except OSError as exc:
+            logger.warning("Could not prune %s: %s", old, exc)
+    return path
+
+
+def list_versions(app) -> list:
+    """Accepted versions still on disk, newest first, with when and why."""
+    state = getattr(app.state, "fl_model_state", None) or _read_state()
+    on_disk = {q.stem for q in versions_dir().glob("*.npz")} if versions_dir().exists() else set()
+    live = state.get("label")
+    out = []
+    for d in reversed(state.get("history", [])):
+        label = d.get("label")
+        if not d.get("accepted") or not label or label not in on_disk:
+            continue
+        out.append({
+            "label": label,
+            "version": d.get("version"),
+            "source": d.get("source"),
+            "at": d.get("at"),
+            "balanced_accuracy": (d.get("candidate") or {}).get("balanced_accuracy"),
+            "loss": (d.get("candidate") or {}).get("loss"),
+            "restored_from": d.get("restored_from"),
+            "live": label == live,
+        })
+        on_disk.discard(label)
+    # Archived files whose decision has aged out of the 50-entry history.
+    out.extend({"label": name, "live": name == live} for name in sorted(on_disk, reverse=True))
+    return out
+
+
+def rollback(app, label: str) -> dict:
+    """Make an archived version live again, as a new version."""
+    path = versions_dir() / f"{label}.npz"
+    if not label or "/" in label or "\\" in label or not path.exists():
+        raise KeyError(f"no archived version {label!r}")
+    live: FederatedHead = app.state.fl_head
+    restored = FederatedHead(seed=0)
+    restored.load(path)
+
+    with _LOCK:
+        state = getattr(app.state, "fl_model_state", None) or _read_state()
+        previous = state.get("label")
+        live.W, live.b = list(restored.W), list(restored.b)
+        live.save(head_path())
+        state["version"] = state.get("version", 0) + 1
+        state["label"] = f"rollback-r{state['version']}"
+        decision = {
+            "accepted": True,
+            "source": "rollback",
+            "restored_from": label,
+            "replaced": previous,
+            "version": state["version"],
+            "label": state["label"],
+            "at": time.time(),
+        }
+        _archive(live, state["label"])
+        state["last"] = decision
+        state.setdefault("history", []).append(decision)
+        state["history"] = state["history"][-50:]
+        _write_state(state)
+        app.state.fl_model_state = state
+
+    logger.warning("Model rolled back: %s -> %s (restored %s)",
+                   previous, state["label"], label)
+    return decision
 
 
 def _read_state() -> dict:
@@ -104,7 +203,8 @@ def _score(head: FederatedHead, X, y) -> dict:
 
 
 def accept_candidate(app, candidate_path, source: str,
-                     tolerance: float = 0.01, extra: Optional[dict] = None) -> dict:
+                     tolerance: float = 0.01, extra: Optional[dict] = None,
+                     loss_tolerance: float = 0.05) -> dict:
     """Validate a candidate against the live head; swap it in if it holds up."""
     store = app.state.fl_store
     live: FederatedHead = app.state.fl_head
@@ -121,9 +221,31 @@ def accept_candidate(app, candidate_path, source: str,
     current = _score(live, Xv, yv)
     proposed = _score(candidate, Xv, yv)
     first = not head_path().exists()
-    accepted = first or (
-        proposed["balanced_accuracy"] >= current["balanced_accuracy"] - tolerance
-    )
+
+    ba_delta = proposed["balanced_accuracy"] - current["balanced_accuracy"]
+    loss_delta = proposed["loss"] - current["loss"]
+    # Relative to the live loss, with a floor so a near-zero loss does not
+    # make the margin vanishingly small.
+    loss_margin = max(loss_tolerance * current["loss"], 1e-4)
+
+    reason = None
+    if first:
+        accepted = True
+    elif ba_delta < -tolerance:
+        accepted = False
+        reason = (
+            f"candidate balanced accuracy {proposed['balanced_accuracy']} "
+            f"regressed past {current['balanced_accuracy']} - {tolerance}"
+        )
+    elif ba_delta <= tolerance and loss_delta > loss_margin:
+        accepted = False
+        reason = (
+            f"balanced accuracy level at {proposed['balanced_accuracy']} but loss "
+            f"rose {current['loss']} -> {proposed['loss']}, past the "
+            f"{loss_margin:.4f} tie-break margin"
+        )
+    else:
+        accepted = True
 
     decision = {
         "accepted": accepted,
@@ -132,6 +254,7 @@ def accept_candidate(app, candidate_path, source: str,
         "current": current,
         "candidate": proposed,
         "tolerance": tolerance,
+        "loss_tolerance": loss_tolerance,
         "val_samples": int(len(Xv)),
         "at": time.time(),
         **(extra or {}),
@@ -148,18 +271,16 @@ def accept_candidate(app, candidate_path, source: str,
             state["label"] = f"{'fl' if source == 'federated' else 'local'}-r{state['version']}"
             decision["version"] = state["version"]
             decision["label"] = state["label"]
+            _archive(live, state["label"])
         else:
-            decision["reason"] = (
-                f"candidate balanced accuracy {proposed['balanced_accuracy']} "
-                f"regressed past {current['balanced_accuracy']} - {tolerance}"
-            )
+            decision["reason"] = reason
         state["last"] = decision
         state.setdefault("history", []).append(decision)
         state["history"] = state["history"][-50:]
         _write_state(state)
         app.state.fl_model_state = state
 
-    logger.info("Model gate (%s): accepted=%s current=%s candidate=%s",
+    logger.info("Model gate (%s): accepted=%s bal_acc %s -> %s, loss %s -> %s",
                 source, accepted, current["balanced_accuracy"],
-                proposed["balanced_accuracy"])
+                proposed["balanced_accuracy"], current["loss"], proposed["loss"])
     return decision

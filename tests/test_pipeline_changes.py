@@ -213,6 +213,52 @@ class TestModelGate:
                    zip(app.state.fl_head.get_weights(), before))
         assert model_state.model_version(app) == "fl-r1"
 
+    def _fixed_scores(self, monkeypatch, model_state, live, cand):
+        """Make the gate see exact scores: perturbing weights cannot produce a
+        clean tie, since it moves predictions and so balanced accuracy too."""
+        scores = iter([live, cand])
+        monkeypatch.setattr(model_state, "_score", lambda h, X, y: next(scores))
+
+    @pytest.mark.parametrize("cand_loss, accepted", [
+        (0.2529, False),  # round 2 of 2026-09-20, which the old gate accepted
+        (0.1950, True),   # within the 5% margin -- federated rounds are noisy
+        (0.1700, True),   # quietly better; the tie-break must not block it
+    ])
+    def test_loss_breaks_a_tie_on_balanced_accuracy(self, gate, store, tmp_path,
+                                                    monkeypatch, cand_loss, accepted):
+        app, model_state = gate
+        _, path = self._trained(store, tmp_path, "c.npz")
+        model_state.accept_candidate(app, path, "federated")
+        before = [w.copy() for w in app.state.fl_head.get_weights()]
+
+        live = {"loss": 0.1941, "accuracy": 0.9846, "balanced_accuracy": 0.75}
+        cand = {"loss": cand_loss, "accuracy": 0.9846, "balanced_accuracy": 0.75}
+        self._fixed_scores(monkeypatch, model_state, live, cand)
+
+        decision = model_state.accept_candidate(app, path, "federated")
+
+        assert decision["accepted"] is accepted
+        if not accepted:
+            assert "tie-break" in decision["reason"]
+            assert all(np.array_equal(a, b) for a, b in
+                       zip(app.state.fl_head.get_weights(), before))
+
+    def test_clear_accuracy_gain_is_accepted_despite_worse_loss(self, gate, store,
+                                                                tmp_path, monkeypatch):
+        """The tie-break decides ties only; it must not veto a real improvement."""
+        app, model_state = gate
+        _, path = self._trained(store, tmp_path, "c.npz")
+        model_state.accept_candidate(app, path, "federated")
+
+        self._fixed_scores(
+            monkeypatch, model_state,
+            {"loss": 0.1941, "accuracy": 0.98, "balanced_accuracy": 0.75},
+            {"loss": 0.4000, "accuracy": 0.98, "balanced_accuracy": 1.00})
+
+        decision = model_state.accept_candidate(app, path, "federated")
+
+        assert decision["accepted"] is True and decision["version"] == 2
+
     def test_saved_head_is_restored_at_startup(self, gate, store, tmp_path):
         from src.federated.head import FederatedHead
 

@@ -190,6 +190,11 @@ class SampleStore:
             sys.path.insert(0, str(sim))
         import workload  # noqa: E402
 
+        if site_key not in workload.SITES:
+            raise KeyError(
+                f"unknown site {site_key!r}; the simulator defines "
+                f"{', '.join(sorted(workload.SITES))}")
+
         X, y = workload.generate(workload.SITES[site_key], n, seed=seed)
         for xi, yi in zip(X, y):
             self.append(xi, int(yi), meta={"synthetic": True, "site": site_key})

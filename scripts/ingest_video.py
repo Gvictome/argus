@@ -10,10 +10,20 @@ is someone who should not be here".
 
     python scripts/ingest_video.py media/events/primary_human_2026.mp4 --label routine_person
     python scripts/ingest_video.py doorbell.mp4 --label anomaly --every-frame
+    python scripts/ingest_video.py street.mp4 --label-by-class
     python scripts/ingest_video.py clip.mp4            # capture, label later
 
 Labels: routine_person, routine_vehicle, routine_animal, routine_package,
 anomaly.
+
+One blanket label suits a clip of one subject. Street footage has cars,
+people and the odd dog in the same frames, and a blanket label would teach
+the head that a car is a person. `--label-by-class` labels each event from
+the class the detector already assigned it -- vehicle -> routine_vehicle,
+animal -> routine_animal -- which is how to fill a class the site has
+never seen without hand-labelling hundreds of events. It only ever says
+"routine": anything genuinely out of place still needs a human, so review
+the result in the dashboard before training on it.
 
 Timestamps come from the video's own frame rate, not the wall clock. The
 features include speed and how long something lingered, and replaying a
@@ -38,6 +48,9 @@ def main() -> int:
     ap.add_argument("video")
     ap.add_argument("--label", default="",
                     help="applied to every event from this clip")
+    ap.add_argument("--label-by-class", action="store_true",
+                    help="label each event routine_<its detected class> "
+                         "instead; for mixed footage such as a street")
     ap.add_argument("--data-dir", default="",
                     help="where to store samples; defaults to the node's own")
     ap.add_argument("--every-frame", action="store_true",
@@ -53,13 +66,19 @@ def main() -> int:
     if args.data_dir:
         os.environ["ARGUS_DATA_DIR"] = args.data_dir
 
+    import numpy as np
+
     import cv2
 
     from src.config import settings
     from src.detection import DetectionConfig, DetectionService
     from src.federated.collector import EventCollector
-    from src.federated.features import LABEL_NAMES
+    from src.federated.features import CLASS_NAMES, LABEL_NAMES
     from src.federated.store import SampleStore
+
+    if args.label and args.label_by_class:
+        print("--label and --label-by-class do the same job two ways; pick one")
+        return 2
 
     label_index = None
     if args.label:
@@ -67,6 +86,10 @@ def main() -> int:
             print(f"unknown label {args.label!r}. Use one of: {', '.join(LABEL_NAMES)}")
             return 2
         label_index = LABEL_NAMES.index(args.label)
+
+    # Built by name rather than by position so a change to either tuple
+    # fails here instead of quietly labelling cars as people.
+    class_to_label = {c: LABEL_NAMES.index(f"routine_{c}") for c in CLASS_NAMES}
 
     service = DetectionService(DetectionConfig(
         cpu_export="auto", motion_gate=not args.every_frame))
@@ -111,20 +134,37 @@ def main() -> int:
     collector.flush()
 
     new_rows = [r for r in store._rows if (r.get("n") or 0) > before]
+    tally: dict = {}
     for row in new_rows:
         meta = row.setdefault("meta", {})
         meta["ingested_from"] = video.name
         if args.zone:
             meta["zone"] = args.zone
-        if label_index is not None:
-            store.set_label_by_n(row["n"], label_index, note=f"clip:{video.name}")
+
+        applied = label_index
+        if args.label_by_class:
+            # The first four features one-hot the class the detector gave
+            # this track; an all-zero head means it fell outside the
+            # taxonomy, so leave it for a human.
+            head = np.asarray(row["x"][:4], dtype=np.float32)
+            applied = (class_to_label[CLASS_NAMES[int(head.argmax())]]
+                       if head.any() else None)
+        if applied is not None:
+            store.set_label_by_n(row["n"], applied, note=f"clip:{video.name}")
+            tally[LABEL_NAMES[applied]] = tally.get(LABEL_NAMES[applied], 0) + 1
+        else:
+            tally["unlabelled"] = tally.get("unlabelled", 0) + 1
 
     print()
     print(f"frames processed : {frames}")
     print(f"events captured  : {len(new_rows)}")
     print(f"stills saved     : {collector.snapshots_saved} "
           f"(+{collector.crops_saved} crops)")
-    if label_index is not None:
+    if args.label_by_class:
+        print("labelled by class:")
+        for name, count in sorted(tally.items(), key=lambda kv: -kv[1]):
+            print(f"  {name:17s} {count}")
+    elif label_index is not None:
         print(f"labelled as      : {args.label}")
     else:
         print("labelled as      : nothing yet -- label them in the dashboard")

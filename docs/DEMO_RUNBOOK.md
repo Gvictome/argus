@@ -244,6 +244,94 @@ barely move. `model_version` on `/api/status` becomes `fl-r1`, `fl-r2`
 and so on each time the gate accepts an update, and the built-in page
 shows it.
 
+Do not claim that from the architecture — measure it. See **C5**.
+
+---
+
+## C4 · A real second node, on the laptop
+
+`sim/fl.py client` is a simulated client: it replays a generated corpus.
+It proves the averaging code runs, not that two cameras can disagree and
+be reconciled. A real second node is one ARGUS install with its own
+camera, its own sample store and its own name, and the laptop can be one
+without buying anything — `CAMERA_SOURCE` takes a webcam index or a video
+file.
+
+**LAPTOP — terminal 1 (the second node, "Node B"):**
+
+```powershell
+cd C:\Users\colab\argus\argus
+$env:ARGUS_DATA_DIR = "C:\Users\colab\argus\nodeB"
+$env:CAMERA_SOURCE  = "media/vtest.avi"
+$env:NODE_NAME      = "Node B"
+$env:CAMERA_ZONE    = "Street"
+$env:PORT           = "8001"
+$env:AUTH_REQUIRED  = "false"
+$env:FL_ENABLED     = "false"
+$env:RECORD_EVENTS  = "false"
+.\.venv\Scripts\python.exe main.py
+```
+
+`ARGUS_DATA_DIR` is the part that matters: without it both nodes write
+one sample store and FedAvg averages a node with itself again, which is
+the thing this is meant to fix. A separate port is only so the two APIs
+can coexist on one machine; on the Pi, Node A stays on 8000.
+
+Swap `CAMERA_SOURCE` for `$env:CAMERA_INDEX = "0"` to use the laptop's
+webcam, which makes the two nodes genuinely see different scenes.
+
+**LAPTOP — terminal 2 (give it samples, then join the round):**
+
+```powershell
+curl.exe -sX POST http://127.0.0.1:8001/api/federated/samples/bootstrap `
+  -H "Content-Type: application/json" -d '{\"site\":\"yard\",\"n\":4000}'
+curl.exe -sX POST http://127.0.0.1:8001/api/federated/round `
+  -H "Content-Type: application/json" `
+  -d '{\"server\":\"10.0.0.239:8080\",\"epochs\":4}'
+```
+
+Seed Node B from a *different* site than Node A — `yard` against Node A's
+`driveway` — or the two updates are near-identical and the average has
+nothing to reconcile. Sites are `driveway`, `backdoor` and `yard`; any
+other name is a 400 listing those three.
+
+Then start the aggregator with `--clients 2` and have the Pi join as
+well, so one round averages two stores. Two nodes is still short of the
+three the Byzantine filters need; say so.
+
+---
+
+## C5 · What training costs the detector
+
+Training is meant to be free — the local head trains in a worker thread,
+a round runs as its own process. On the laptop that cost 0.1%. The Pi has
+four cores and no spare headroom, so measure it there rather than
+assuming it carries over.
+
+**PI — terminal 2 (with the node already running in terminal 1):**
+
+```bash
+cd ~/argus && source .venv/bin/activate
+python scripts/measure_training_cost.py --epochs 400 --baseline 20
+python scripts/measure_training_cost.py --mode round --baseline 20
+```
+
+It samples `/api/detection/status` before, during and after, and prints
+each phase's median. Read `capture_fps` for the verdict and `detect_ms`
+for CPU contention; `detect_fps` follows the motion gate, so it tracks
+what is in front of the camera, not the training. Keep the scene steady
+for the whole run.
+
+Two things it refuses to let you misread: a training window too short to
+sample is reported as "not measurable" rather than as a number, and a
+change smaller than the baseline's own spread is labelled as such.
+
+Measured on the laptop against a looped clip (18.3s of training, 70
+samples): `capture_fps` held at 10.00 throughout, every change inside the
+baseline spread. That validates the method only — a file source plays at
+the clip's own rate, so it cannot show headroom. **The Pi number is still
+to be taken.**
+
 ---
 
 ## C3 · Which YOLO to load
@@ -365,6 +453,17 @@ re-export NCNN at 416.
   YOLO `.hef` is compiled for it (x86 Linux + Hailo Dataflow Compiler,
   `scripts/export_hailo.py --hw-arch hailo10h`). The Hailo *hardware* is
   verified: 76 FPS on `yolov8m_h10.hef` with `hailortcli benchmark`.
+  This is **not** blocked on hardware we do not have: the dev laptop is
+  x86_64, so `wsl --install -d Ubuntu-22.04` gives the DFC the Linux host
+  it needs. What is still missing is the DFC itself, which is a manual
+  download behind a free developer.hailo.ai account, and confirmation
+  that the installed DFC version supports `hailo10h`.
+- **No vehicle or animal samples.** Balanced accuracy cannot pass 0.75
+  while two of the five classes are empty. Fill them from footage rather
+  than by hand: `scripts/ingest_video.py street.mp4 --label-by-class`
+  labels each event from the class the detector assigned it, which is
+  what mixed footage needs. Review the result in the dashboard before
+  training — it only ever writes `routine_*`, never `anomaly`.
 - **Threat model on CPU is expensive.** Keep `THREAT_ENABLED=false` until it
   is compiled for the accelerator.
 - **Dashboard auth mismatch.** The dashboard never sends its token to the
