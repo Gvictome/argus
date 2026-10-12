@@ -138,7 +138,7 @@ quote laptop numbers as Pi numbers.
   setting and test, and the known gaps
 
 - `docs/guides/` — these guides, plain language, one topic each
-- `docs/QUICKSTART.md` — every command, labelled by machine
-- `docs/OVERVIEW.md` — the system in one pass, for a technical reader
-- `docs/DEMO_RUNBOOK.md` — the full runbook with measured numbers
+- `docs/operations/QUICKSTART.md` — every command, labelled by machine
+- `docs/design/OVERVIEW.md` — the system in one pass, for a technical reader
+- `docs/operations/DEMO_RUNBOOK.md` — the full runbook with measured numbers
 - `sim/README.md` — the simulator, and what it can and cannot prove

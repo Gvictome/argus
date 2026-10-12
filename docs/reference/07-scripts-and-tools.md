@@ -110,7 +110,7 @@ Standalone experiments, not imported by the node.
 | Package | What it is |
 |---|---|
 | `src/agents/` | `ErrorRouter` classifies an error report and routes it to `SyntaxAgent`, `DependencyAgent`, `HardwareAgent` or `NetworkAgent`, which suggest or apply a fix; `FederatedAgent` is a separate early helper. Exposed at `/api/errors/*` and `/api/agents/status`. A development aid, not part of detection |
-| `prometheus/` | **Not** the metrics system. A separate voice-activated orchestrator ("Hey Prometheus", "switch to argus") used during development; `python -m prometheus.main`. Documented in `docs/PROMETHEUS.md` |
+| `prometheus/` | **Not** the metrics system. A separate voice-activated orchestrator ("Hey Prometheus", "switch to argus") used during development; `python -m prometheus.main`. Documented in `docs/archive/PROMETHEUS.md` |
 
 The Prometheus *metrics* system (the time-series database scraping
 `/metrics`) is a different thing entirely and lives in

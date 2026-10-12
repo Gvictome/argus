@@ -166,7 +166,7 @@ in to ARGUS itself. The dashboard is served at `/` for browsers and at
 ## 9. What is still missing
 
 Worth saying plainly, because a judge may ask and because
-`docs/SHOWCASE_SPRINT_PLAN.md` A-9 calls for exactly this honesty:
+`docs/project/SHOWCASE_SPRINT_PLAN.md` A-9 calls for exactly this honesty:
 
 - **Tokens live in memory.** A restart logs everyone out. Fine for a
   demo, wrong for production.

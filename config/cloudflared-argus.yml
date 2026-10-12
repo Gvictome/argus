@@ -17,7 +17,7 @@
 #                           camera.
 #
 # Use `scripts/run_tunnel.sh`, which refuses to start unless gate 2 is on.
-# See docs/CLOUDFLARE_TUNNEL.md.
+# See docs/operations/CLOUDFLARE_TUNNEL.md.
 #
 # Setup
 # ─────

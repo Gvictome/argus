@@ -154,7 +154,7 @@ multi-camera host, and it is worth saying why on the poster.
   that threshold naturally; a single host with two cameras never does,
   because it is one node.
 
-See [`FEDERATED_ARCHITECTURE.md`](FEDERATED_ARCHITECTURE.md).
+See [`FEDERATED_ARCHITECTURE.md`](../design/FEDERATED_ARCHITECTURE.md).
 
 ---
 

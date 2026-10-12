@@ -159,7 +159,7 @@ published SHA-256, and writes `models/threat-yolo11n.pt`. Do this while
 you have network; the demo unit runs offline.
 
 Without it the API still starts and logs `Threat detection unavailable`.
-See [`THREAT_DETECTION.md`](THREAT_DETECTION.md).
+See [`THREAT_DETECTION.md`](../design/THREAT_DETECTION.md).
 
 ---
 

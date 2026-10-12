@@ -1,7 +1,7 @@
 # Face Recognition
 
 ArcFace-based identity matching for the ARGUS detection pipeline.
-Showcase lane G-1 through G-8 (`docs/SHOWCASE_SPRINT_PLAN.md`).
+Showcase lane G-1 through G-8 (`docs/project/SHOWCASE_SPRINT_PLAN.md`).
 
 ---
 

@@ -123,7 +123,7 @@ written down.
 ## 4.4 Cost, and when to turn it on
 
 Measured on x86 (Ryzen AI 7 350), YOLO11n, whole frame
-(`docs/THREAT_DETECTION.md`):
+(`docs/design/THREAT_DETECTION.md`):
 
 | Input size | ms / frame | Note |
 |---|---|---|

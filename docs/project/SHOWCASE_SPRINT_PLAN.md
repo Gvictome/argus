@@ -1,7 +1,7 @@
 # ARGUS Showcase Sprint Plan
 
 **Status:** Proposed - owner assignments not yet confirmed with the team
-**Companion to:** `docs/SHOWCASE_PRD.md`
+**Companion to:** `docs/project/SHOWCASE_PRD.md`
 **Drafted:** 2026-08-12
 **Showcase:** 2026-11-22
 

@@ -49,13 +49,13 @@ As of 2026-10-05. Showcase 2026-11-22; feature freeze 2026-11-08.
 | Item | Where |
 |---|---|
 | The GitHub default branch (`master`) is a stale mirror and `main` is behind too. The work is on `feat/threat-detection`, not merged | GitHub settings, or merge when ready |
-| `docs/PROPOSAL.md` and `docs/SHOWCASE_PRD.md` still state 24-30 FPS; the target is now 8-12 FPS | Revise |
-| `docs/PROPOSAL.md` still lists face requirements FR-4/FR-5/PR-4/PR-7 and objective O2 as complete | Mark "implemented, measured, disabled for performance" and keep the 0.9996 LFW result |
+| `docs/project/PROPOSAL.md` and `docs/project/SHOWCASE_PRD.md` still state 24-30 FPS; the target is now 8-12 FPS | Revise |
+| `docs/project/PROPOSAL.md` still lists face requirements FR-4/FR-5/PR-4/PR-7 and objective O2 as complete | Mark "implemented, measured, disabled for performance" and keep the 0.9996 LFW result |
 | `QUICKSTART.md`, `OVERVIEW.md`, guide 6, `FEDERATED_ARCHITECTURE.md` and `JETSON_MIGRATION.md` say rounds run only while idle / nothing is moving | True only once `notify_motion()` is wired |
 | `tests/test_federated_infra.py::test_an_unknown_label_is_rejected` fails instead of skipping without `media/vtest.avi` | Add the same skip its sibling test has |
 | FastAPI `on_event` is deprecated | Move to a lifespan handler when convenient |
 | Older docs (`ARCHITECTURE.md`, `BOOTUP.md`, `WEB_APP_ARCHITECTURE.md`, `PROMETHEUS*.md`) date from January and describe the earlier design | Treat this reference as current where they disagree |
-| **Uncommitted on this laptop (2026-10-05):** robust strategy wiring (`src/federated/robust_strategy.py`, `central_server/*`, `sim/fl.py`, `src/federated/server.py`, `run_central_server.ps1`), the gate loss tie-break, version archive and rollback (`model_state.py`, `trial_routes.py`), the cron retry fix (`rounds.py`, `scheduler.py`), `deploy/`, `docs/PRODUCTION_FL.md`, `ingest_video.py --label-by-class`, `scripts/measure_training_cost.py`, runbook and doc edits, and their tests | Commit and push, gated on pytest's exit code |
+| **Uncommitted on this laptop (2026-10-05):** robust strategy wiring (`src/federated/robust_strategy.py`, `central_server/*`, `sim/fl.py`, `src/federated/server.py`, `run_central_server.ps1`), the gate loss tie-break, version archive and rollback (`model_state.py`, `trial_routes.py`), the cron retry fix (`rounds.py`, `scheduler.py`), `deploy/`, `docs/operations/PRODUCTION_FL.md`, `ingest_video.py --label-by-class`, `scripts/measure_training_cost.py`, runbook and doc edits, and their tests | Commit and push, gated on pytest's exit code |
 | The fine-taxonomy branch (`feat/fine-taxonomy`) exists only on the other development machine | Push it so it is not a single-machine artefact |
 
 ## 10.5 The plan of record (from the 2026-10-04 status report)
@@ -77,10 +77,9 @@ As of 2026-10-05. Showcase 2026-11-22; feature freeze 2026-11-08.
 | Showcase | | Nov 22 |
 
 Production operation of the federated loop (the schedule, model versions,
-rollback) is documented separately in `docs/PRODUCTION_FL.md`.
+rollback) is documented separately in `docs/operations/PRODUCTION_FL.md`.
 
-Datasets for the matrix, in order: CIFAR-10 with Dirichlet partitioning
-plus FEMNIST (comparability with published results), CASAS smart-home
-data (real per-home heterogeneity), then VIRAT or UCF-Crime run through
-ARGUS's own YOLO and `features.py` (real multi-site data in ARGUS's own
-feature space, filling the empty classes).
+Datasets for the matrix (decided 2026-10-12, `docs/research/datasets.md`):
+MEVA as the main benchmark, one client per security camera; ShanghaiTech
+Campus as the anomaly test set; CIFAR-10 with Dirichlet partitioning only
+for comparison with published results.

@@ -180,7 +180,7 @@ Every round produces an auditable record:
 6. Repeat.
 
 Schedule details, including why the interval is persisted to disk, are in
-[`JETSON_MIGRATION.md`](JETSON_MIGRATION.md) section 5. The short version:
+[`JETSON_MIGRATION.md`](../operations/JETSON_MIGRATION.md) section 5. The short version:
 with an in-memory timer, any reboot inside a 14-day window restarts the
 countdown, and a node rebooted weekly would run FL *never* while looking
 perfectly healthy.
@@ -207,7 +207,7 @@ retried rather than deferred another fortnight.
 ## 5. What is not built yet
 
 Stated because a judge will ask, and because
-`docs/SHOWCASE_SPRINT_PLAN.md` A-9 asks for exactly this honesty:
+`docs/project/SHOWCASE_SPRINT_PLAN.md` A-9 asks for exactly this honesty:
 
 - **No update signing.** A node is identified by a string it chooses.
   Nothing cryptographically binds an update to a node, so the defence is

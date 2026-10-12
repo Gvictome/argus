@@ -54,7 +54,7 @@ process** talking gRPC, not a thread, so contention is real.
 
 ## Profiles
 
-Timings come from Rev 2.2 Table 11 and `docs/HAILO_PIPELINE.md`, **with ArcFace
+Timings come from Rev 2.2 Table 11 and `docs/operations/HAILO_PIPELINE.md`, **with ArcFace
 removed** per the 2026-09-14 scope change. Each stage carries its source.
 
 | Profile | CPU | Accel | Serial ceiling | Pipelined |

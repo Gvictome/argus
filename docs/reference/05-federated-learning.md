@@ -170,7 +170,7 @@ Every accepted version is also archived as `data/fl_models/<label>.npz`
 again as a **new** version, `rollback-rN`, recording what it restored and
 what it replaced; the counter never goes backwards. Exposed as
 `GET /api/federated/head/versions` and `POST /api/federated/head/rollback`
-(section 6.2). Operating it is covered in `docs/PRODUCTION_FL.md`.
+(section 6.2). Operating it is covered in `docs/operations/PRODUCTION_FL.md`.
 
 **Why the loss tie-break exists:** balanced accuracy moves in coarse steps
 (0.25 with four represented classes), so two different models often score
@@ -416,7 +416,9 @@ balanced sample", which is the one case where federation has nothing to
 overcome. The head also does not classify pixels: YOLO already says
 "vehicle", and the head's job is whether that vehicle is routine *here*.
 
-CIFAR-10 comes back once, deliberately, in the 135-run study (section
-10.5): with **Dirichlet** partitioning, alongside FEMNIST, so the robust
-aggregation result can be compared with published FL numbers. It is never
-to be split IID again.
+**Next (decided 2026-10-12):** MEVA, a CC-BY security-camera dataset with
+29 cameras, replaces CIFAR-10 as the federated benchmark, one client per
+camera. ShanghaiTech Campus is the anomaly test set, and Stanford Cars is
+fine-tuned on MEVA vehicle crops for the make classifier. CIFAR-10 stays only
+as a Dirichlet-partitioned comparison with published FL results. Plan and
+converter outline: `docs/research/datasets.md`.

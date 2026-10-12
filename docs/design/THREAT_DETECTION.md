@@ -37,7 +37,7 @@ people at all. Full numbers in
 Implementation is `src/detection/threat.py`; it is wired into
 `DetectionService` at startup by `src/api/app.py`.
 
-The model is not ours. See [`NOTICE.md`](../NOTICE.md) for provenance,
+The model is not ours. See [`NOTICE.md`](../../NOTICE.md) for provenance,
 license, and the changes we made.
 
 ---
@@ -61,7 +61,7 @@ python scripts/fetch_models.py --variant yolo11s
 runs offline.
 
 Requires `ultralytics`, which the minimal install in
-`docs/SETUP_TESTING.md` deliberately skips. Without it — or without the
+`docs/operations/SETUP_TESTING.md` deliberately skips. Without it — or without the
 weights — the API still starts, logs `Threat detection unavailable: ...`,
 and reports `"threat_detection": false`. Everything else runs normally.
 

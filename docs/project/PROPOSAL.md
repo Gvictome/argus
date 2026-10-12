@@ -81,7 +81,7 @@ answers, is the one that makes federated learning hard in practice:
 ## 4. System design
 
 Nine subsystems; full plain-language treatment in
-[`SUBSYSTEMS.md`](SUBSYSTEMS.md).
+[`SUBSYSTEMS.md`](../design/SUBSYSTEMS.md).
 
 ```
    camera ─▶ capture ─▶ DETECTION CASCADE ─┬─▶ annotation ─▶ dashboard

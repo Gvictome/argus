@@ -233,7 +233,7 @@ curl -s localhost:8000/api/federated/status | python -m json.tool
 Rounds then run every 14 days at 02:00, and catch up promptly if the Pi
 was off across the due date. To run the node as a service that starts on boot,
 use `deploy/argus-node.service`; the full production setup (schedule,
-model versions, rollback, monitoring) is in `docs/PRODUCTION_FL.md`. The scheduler has an "only while idle" check,
+model versions, rollback, monitoring) is in `docs/operations/PRODUCTION_FL.md`. The scheduler has an "only while idle" check,
 but nothing feeds it motion yet (`notify_motion()` has no caller), so today
 it always reads idle; see [section 10](10-status-and-gaps.md). Training
 runs in a separate one-core process either way, so detection keeps going.
@@ -324,7 +324,7 @@ AUTH_REQUIRED=true ARGUS_ADMIN_PASSWORD='<a real password>' SECRET_KEY='<random>
 The tunnel script refuses to start unless the running node reports
 `AUTH_REQUIRED` on **and** an unauthenticated request to a protected
 endpoint returns 401. Add a Cloudflare Access policy as the first gate.
-Details: `docs/CLOUDFLARE_TUNNEL.md`.
+Details: `docs/operations/CLOUDFLARE_TUNNEL.md`.
 
 ---
 

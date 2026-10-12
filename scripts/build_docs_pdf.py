@@ -39,13 +39,13 @@ from src.config import BASE_DIR  # noqa: E402
 DOCS_DIR = BASE_DIR / "docs"
 
 DEFAULT_DOCS = [
-    ("QUICKSTART", "ARGUS Quick Start", "Every command, labelled PI or LAPTOP"),
-    ("OVERVIEW", "ARGUS in One Pass", "What each part does, and what runs it"),
-    ("DEMO_RUNBOOK", "ARGUS Demo Runbook", "Running the demo end to end"),
-    ("SUBSYSTEMS", "ARGUS Subsystems", "How the system fits together"),
-    ("PROPOSAL", "ARGUS Project Proposal", "Revision 2 — Senior Design 2026"),
-    ("DEMO_SCRIPT", "ARGUS Demo Script", "Walkthrough, queries, codebase"),
-    ("PRODUCTION_FL", "ARGUS Federated Learning in Production",
+    ("operations/QUICKSTART", "ARGUS Quick Start", "Every command, labelled PI or LAPTOP"),
+    ("design/OVERVIEW", "ARGUS in One Pass", "What each part does, and what runs it"),
+    ("operations/DEMO_RUNBOOK", "ARGUS Demo Runbook", "Running the demo end to end"),
+    ("design/SUBSYSTEMS", "ARGUS Subsystems", "How the system fits together"),
+    ("project/PROPOSAL", "ARGUS Project Proposal", "Revision 2 — Senior Design 2026"),
+    ("project/DEMO_SCRIPT", "ARGUS Demo Script", "Walkthrough, queries, codebase"),
+    ("operations/PRODUCTION_FL", "ARGUS Federated Learning in Production",
      "The schedule, model versions, rollback, deployment and monitoring"),
 ]
 
@@ -80,7 +80,7 @@ MASTER = [
 ] + [
     (f"docs/{stem}.md", "Part II · The guides") for stem, _, _ in GUIDES
 ] + [
-    ("docs/QUICKSTART.md", "Part III · Quick start"),
+    ("docs/operations/QUICKSTART.md", "Part III · Quick start"),
     ("sim/README.md", "Appendix · The simulator"),
 ]
 
@@ -357,9 +357,13 @@ def main() -> int:
     wanted = source
     if args.docs:
         chosen = {d.upper().removesuffix(".MD") for d in args.docs}
-        wanted = [d for d in source if d[0].upper() in chosen]
-        for name in sorted(chosen - {d[0].upper() for d in source}):
-            wanted.append((name, name.replace("_", " ").title(), ""))
+        # Match on the file name, so --docs PROPOSAL finds project/PROPOSAL.
+        base = lambda stem: stem.split("/")[-1].upper()
+        wanted = [d for d in source if base(d[0]) in chosen]
+        for name in sorted(chosen - {base(d[0]) for d in source}):
+            found = sorted(DOCS_DIR.rglob(f"{name}.md"))
+            stem = found[0].relative_to(DOCS_DIR).with_suffix("").as_posix() if found else name
+            wanted.append((stem, name.replace("_", " ").title(), ""))
 
     results = [
         render(DOCS_DIR / f"{stem}.md", title, subtitle, out_dir, chrome)

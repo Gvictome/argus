@@ -77,12 +77,14 @@ It contains everything below in one file. Rebuild it with
 
 | | |
 |---|---|
+| [`docs/README.md`](docs/README.md) | Map of every doc folder: reference, guides, operations, design, research, project, archive |
+| [`docs/research/datasets.md`](docs/research/datasets.md) | The dataset plan: MEVA replaces CIFAR-10, plus Stanford Cars and ShanghaiTech |
 | [`docs/reference/`](docs/reference/) | The technical reference: overview, how to run, computer vision, threat classification, federated learning, API and data, scripts, configuration, tests, status and gaps |
 | [`docs/guides/`](docs/guides/) | Eight plain-language guides, one topic each |
-| [`docs/QUICKSTART.md`](docs/QUICKSTART.md) | Every demo command, labelled PI or LAPTOP |
+| [`docs/operations/QUICKSTART.md`](docs/operations/QUICKSTART.md) | Every demo command, labelled PI or LAPTOP |
 | [`sim/README.md`](sim/README.md) | The node simulator, and what it can and cannot prove |
-| [`docs/THREAT_DETECTION.md`](docs/THREAT_DETECTION.md), [`docs/HAILO_PIPELINE.md`](docs/HAILO_PIPELINE.md), [`docs/CLOUDFLARE_TUNNEL.md`](docs/CLOUDFLARE_TUNNEL.md) | Deep dives |
-| [`docs/PROPOSAL.md`](docs/PROPOSAL.md) | The project proposal |
+| [`docs/design/THREAT_DETECTION.md`](docs/design/THREAT_DETECTION.md), [`docs/operations/HAILO_PIPELINE.md`](docs/operations/HAILO_PIPELINE.md), [`docs/operations/CLOUDFLARE_TUNNEL.md`](docs/operations/CLOUDFLARE_TUNNEL.md) | Deep dives |
+| [`docs/project/PROPOSAL.md`](docs/project/PROPOSAL.md) | The project proposal |
 
 ## Repository layout
 

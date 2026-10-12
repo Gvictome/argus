@@ -104,3 +104,7 @@ central_server/checkpoints/
 
 # Per-node settings for the systemd service; may hold a password
 deploy/node.env
+
+# Ultralytics weights fetched by scripts/compare_detectors.py
+/yolo11n.pt
+/yolo26n.pt
