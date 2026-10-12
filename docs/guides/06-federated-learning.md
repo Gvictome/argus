@@ -176,6 +176,11 @@ the event list.
   setting to change.
 - **More rounds help.** Three rounds starting from an untrained partner is
   not enough to converge.
+- **Screening needs a crowd.** The server now checks every update before
+  averaging it and drops ones that are broken, far too large, or pulling
+  the opposite way from everyone else. That last check needs at least
+  three cameras to mean anything; with one or two it is skipped, and the
+  round's report says so.
 
 ---
 

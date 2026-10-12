@@ -23,7 +23,7 @@ SampleStore.set_label
         │
 FederatedHead.fit               src/federated/head.py        local training on a copy
         │
-node_client  ◄──── Flower round ────►  aggregator (FedAvg)   src/federated/node_client.py
+node_client  ◄──── Flower round ────►  aggregator (robust)   src/federated/node_client.py
         │ global.npz
 model_state.accept_candidate    src/federated/model_state.py the validation gate
         │ accepted
@@ -152,9 +152,11 @@ Nothing reaches the live head without passing
 `accept_candidate(app, candidate_path, source, tolerance=0.01)`:
 
 1. Score the live head and the candidate on this node's held-out 20%.
-2. Accept if the candidate's balanced accuracy is no more than
-   `tolerance` below the live head's. The very first model is accepted
-   outright.
+2. Reject if the candidate's balanced accuracy is more than `tolerance`
+   below the live head's. If balanced accuracy is level (within
+   `tolerance`), reject when the candidate's loss is more than
+   `loss_tolerance` (5%, relative, with a 1e-4 floor) worse than the live
+   head's. Otherwise accept. The very first model is accepted outright.
 3. On acceptance, swap the weights in one assignment, save
    `data/fl_head.npz`, bump the version (`local-rN` or `fl-rN`).
 4. Record every decision, accepted or not, in `data/fl_model_state.json`
@@ -163,10 +165,20 @@ Nothing reaches the live head without passing
 `load_model_state(app)` restores the accepted head at startup, so an
 update survives a restart.
 
-**Known bug:** the gate compares balanced accuracy only. In the 2026-09-20
-hardware run, round 2's averaged model had worse loss (0.1941 → 0.2529)
-and was accepted, because 0.75 against 0.75 is not a regression. It needs
-a loss tie-break.
+Every accepted version is also archived as `data/fl_models/<label>.npz`
+(newest 20 kept). `rollback(app, label)` makes an archived version live
+again as a **new** version, `rollback-rN`, recording what it restored and
+what it replaced; the counter never goes backwards. Exposed as
+`GET /api/federated/head/versions` and `POST /api/federated/head/rollback`
+(section 6.2). Operating it is covered in `docs/PRODUCTION_FL.md`.
+
+**Why the loss tie-break exists:** balanced accuracy moves in coarse steps
+(0.25 with four represented classes), so two different models often score
+the same. In the 2026-09-20 hardware run, round 2's averaged model had
+worse loss (0.1941 → 0.2529) and was accepted at 0.75 against 0.75. Under
+the current gate that candidate is rejected, and the decision record
+carries the reason. A candidate that clearly improves balanced accuracy is
+still taken regardless of loss.
 
 ---
 
@@ -223,13 +235,20 @@ Only weights travel. No frames, stills or feature vectors leave the node.
   return promptly.
 * A failed round does **not** advance the schedule, so it retries at the
   next wake.
+  "Failed" means the round never happened: `run_round_blocking` returns
+  `completed: false` when the aggregator is unreachable, the round times
+  out, or there are too few labels, and the scheduler treats that as a
+  failure. Until 2026-10-05 it did not: that result arrived as a dict, not
+  an exception, so an unreachable aggregator was recorded as a finished
+  round and the retry slipped 14 days. A round the gate rejected is
+  `completed: true` and does advance the schedule.
 * `is_idle()` defers a round if motion was seen in the last 10 minutes.
   **But nothing calls `notify_motion()`, so this check always passes
   today.**
 
 ---
 
-## 5.10 `robust.py`: Byzantine-robust aggregation (not wired in)
+## 5.10 `robust.py` and `robust_strategy.py`: Byzantine-robust aggregation
 
 Plain FedAvg lets one broken or hostile node move the global model for
 everyone. `RobustAggregator.aggregate(global_weights, updates)` screens
@@ -246,11 +265,43 @@ Filters 3 and 4 need a majority to be honest, so they are skipped below 3
 contributors and the report says so. `validate_candidate()` is the matching
 promotion check.
 
-21 tests in `tests/test_robust_aggregation.py` cover it. **No server
-imports it yet**: the central aggregator, the simulator server and the
-legacy server all run plain FedAvg. Wiring it into
-`central_server/fl_aggregator.py`'s `ArgusStrategy.aggregate_fit` is the
-planned next step and the core of the research claim.
+21 tests in `tests/test_robust_aggregation.py` cover the filters.
+
+**How it reaches the servers.** `RobustFedAvg` in
+`src/federated/robust_strategy.py` is a Flower `FedAvg` subclass:
+
+1. `configure_fit` remembers the parameters it sends out that round. They
+   are the reference every returned update is measured against.
+2. `aggregate_fit` turns each `FitRes` into a `ClientUpdate`, named by the
+   `node_id` the client reports (falling back to Flower's connection id;
+   duplicate names get a `#n` suffix so two nodes left on the default name
+   are both screened), and calls `RobustAggregator.aggregate`.
+3. Rejected nodes are logged at WARNING. Client metrics are averaged over
+   the kept updates only. The round's metrics gain `robust_accepted`,
+   `robust_rejected`, `robust_consensus` and `robust_report` (the full
+   report as JSON).
+4. If nothing survives, it returns no parameters, and Flower keeps the
+   current global model. Nothing is checkpointed for that round.
+
+`aggregation="fedavg"` skips all of this and calls the stock
+`FedAvg.aggregate_fit`: the baseline arm of the comparison study. One test
+asserts the switch reproduces stock FedAvg exactly; another runs the same
+sign-flip round through both arms and checks that only FedAvg is pulled
+off course (`tests/test_robust_strategy.py`, 11 tests).
+
+| Server | How to choose the arm |
+|---|---|
+| `central_server/fl_aggregator.py` | `"aggregation"` in `central_config.json`, `ARGUS_AGGREGATION`, or `run_central_server.ps1 -Aggregation fedavg` |
+| `sim/fl.py serve` | `--aggregation robust` (default) or `fedavg`; each round's report is written to `sim/_run/fl_events.jsonl` as `kind: aggregation` |
+| `src/federated/server.py` | `start_server(aggregation=...)` |
+
+Verified end to end on 2026-10-05: a real Flower server with three
+simulated clients over gRPC, two rounds, all three updates accepted each
+round with consensus filtering applied.
+
+The honest limit is unchanged: with one or two nodes, filters 3 and 4 do
+not run, so on today's single Pi the screening can catch a broken or
+oversized update but not a disagreeing one.
 
 ---
 
@@ -259,8 +310,15 @@ planned next step and the core of the research claim.
 One process, two jobs:
 
 * **Flower server** on `ARGUS_FL_ADDRESS` (default `0.0.0.0:8080`).
-  `ArgusStrategy` is FedAvg plus a hook that records per-client metrics
-  and saves a checkpoint after every round. Metrics are weighted by sample
+  `ArgusStrategy` is `RobustFedAvg` (section 5.10) plus a hook that
+  records per-client metrics and saves a checkpoint after every round.
+  Each round's history entry carries the screening report
+  (`aggregation`), and rejections count in the Prometheus counter
+  `argus_fl_rejected_updates_total{node_id}`. A round where every update
+  was rejected saves no checkpoint. The global version counter resumes
+  from the highest `model_round_*_v<N>.npz` on disk at startup
+  (`resume_model_version`); before 2026-10-05 it restarted at 1 and a
+  restarted server overwrote the previous run's checkpoints. Metrics are weighted by sample
   count (without that, Flower drops them and every dashboard reads zero).
   On start it resumes from the latest checkpoint.
 * **Flask REST API** on 8090:
@@ -276,8 +334,11 @@ One process, two jobs:
 
 Set `ARGUS_AUTH_TOKEN` to require a bearer token on the protected routes.
 Config comes from `central_config.json` overridden by `ARGUS_FL_ADDRESS`,
-`ARGUS_MIN_CLIENTS`, `ARGUS_ROUNDS`. `docker-compose.yml` runs it with
-Prometheus (9090), Grafana (3000) and a Cloudflare tunnel.
+`ARGUS_MIN_CLIENTS`, `ARGUS_ROUNDS`, `ARGUS_AGGREGATION`.
+`docker-compose.yml` runs it with Prometheus (9090), Grafana (3000) and a
+Cloudflare tunnel. The image builds from the repo root
+(`central_server/Dockerfile`, with its own `Dockerfile.dockerignore`) so
+it can copy `robust.py` and `robust_strategy.py` from `src/federated/`.
 
 ---
 
@@ -287,7 +348,7 @@ Prometheus (9090), Grafana (3000) and a Cloudflare tunnel.
 |---|---|
 | `workload.py` | Synthetic per-site events in the 19-feature layout. Each site has its own class mix, active hours, never-routine classes and loitering limit, so the data is non-IID in both label mix and the rule itself |
 | `head.py` | Copy of the node's head |
-| `fl.py` | `serve` (FedAvg Flower server) and `client --site` (trains on generated data). Separate OS processes, one BLAS thread each |
+| `fl.py` | `serve` (Flower server; robust aggregation, or `--aggregation fedavg`) and `client --site` (trains on generated data). Separate OS processes, one BLAS thread each |
 | `pipeline.py` | The per-frame loop: `cpu` stages burn a real core, `accel` stages sleep (the Hailo works over PCIe while the CPU is free), `measured` stages time the real head |
 | `profiles.py` | Stage timings, each with its source |
 | `run_node.py` | One node at a target FPS with a live Flower round against it; reports the FPS hit, Prometheus on 9108 |
@@ -329,3 +390,33 @@ the team wrote both the generator and the model.
 Neither is yet evidence that federated beats local-only training. That
 needs the three-arm comparison (untrained / local-only / federated, on one
 frozen holdout, ideally leave-one-site-out) in the 2026-09-27 plan.
+
+The fine-taxonomy study (2026-10-03, section 5.14) is the first result
+that bears on that question, and it points the other way: in every run,
+local-only training beat plain FedAvg on site-specific vehicle makes.
+
+---
+
+## 5.14 Datasets: the CIFAR-10 stand-in and what replaced it
+
+The project trained on four kinds of data, in this order. Only the last
+two exercise the head ARGUS actually runs.
+
+| Stage | Data | What it proved | Files |
+|---|---|---|---|
+| 1. Plumbing, April | CIFAR-10, 2 nodes, **IID** split (`IidPartitioner`) | Flower works end to end; a CNN reached 88.86% eval accuracy. Validates plumbing, not learning: an IID split is the easiest case FL has | `Dropbox/argus/federated-learning/flower-federated-learning-cifar10/` (`tfexample/` code, `TRAINING_REPORT.md`); the same report as `Dropbox/argus/argus/flower_training_report_2026-04-24.md` |
+| 1b. Early sandboxes | MNIST (Keras); DETR on CPPE-5; centralised vs local vs federated on synthetic data | Ideas only | `Dropbox/argus/argus/federated_learning_keras.py`; `Dropbox/argus/federated-learning/federated-learning-sandbox/` (`flower_detr/`, `sandbox.py`) |
+| 2. The ARGUS workload, September | Synthetic per-site events in the head's 19-feature layout, three sites, **non-IID** in both label mix and the rule itself | The federated head trains and averages across dissimilar sites. Cannot prove real-world accuracy: the team wrote the generator and the model | `sim/workload.py`, `sim/fl.py`, `sim/README.md` (repo) |
+| 3. Real events, 2026-09-20 | 322 hand-labelled events from the Pi, `data/training/samples.jsonl` on the node | Two real rounds Pi ↔ laptop. Balanced accuracy pinned at 0.75 by two near-empty classes | `scripts/ingest_video.py` (now with `--label-by-class` to fill vehicle and animal from street footage), section 5.13 |
+| 4. Fine taxonomy, 2026-10-03 | Stanford Cars (16,185 photos, 49 makes) for a crop classifier whose outputs add 16 features to the head (19 → 35) | Make classifier 0.832 test accuracy; in simulation FedAvg balanced accuracy 0.860 → 0.894 with it. Local-only beat FedAvg in every run | `Dropbox/argus/argus/ARGUS_Fine_Taxonomy_2026-10-03_v2.pdf`. Code is on branch `feat/fine-taxonomy` in the `argus-fl` working copy on the other development machine, not on GitHub yet; data under `D:\argus-data` on that machine |
+
+Why CIFAR-10 was retired: `sim/workload.py` says it directly. The April
+report split CIFAR-10 with `IidPartitioner`, "each node gets a random,
+balanced sample", which is the one case where federation has nothing to
+overcome. The head also does not classify pixels: YOLO already says
+"vehicle", and the head's job is whether that vehicle is routine *here*.
+
+CIFAR-10 comes back once, deliberately, in the 135-run study (section
+10.5): with **Dirichlet** partitioning, alongside FEMNIST, so the robust
+aggregation result can be compared with published FL numbers. It is never
+to be split IID again.

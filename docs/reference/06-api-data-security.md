@@ -96,6 +96,8 @@ How a dashboard label becomes a class (`_resolve_label`):
 | POST | `/api/federated/samples/{id}/label` | `{"label": 0..4}` |
 | POST | `/api/federated/samples/bootstrap` | `{"site", "n", "seed"}`, synthetic rows |
 | GET | `/api/federated/head` | Head size, version, gate history |
+| GET | `/api/federated/head/versions` | Archived versions, newest first, and which is live |
+| POST | `/api/federated/head/rollback` | `{"label": "fl-r3"}`, make an archived version live as a new version (409 during a manual round, 404 if not archived) |
 | POST | `/api/federated/head/train` | `{"epochs", "min_samples", "tolerance"}`, train a copy and gate it |
 | POST | `/api/federated/predict` | `{"features": [19 numbers]}` |
 | POST | `/api/federated/round` | `{"server", "epochs", "min_samples", "tolerance"}`, start a round (409 if one is running) |

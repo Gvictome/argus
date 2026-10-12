@@ -6,7 +6,8 @@ that matter, and learns from other nodes without any of them sharing
 footage.
 
 This reference describes the code on `feat/threat-detection` as of
-2026-10-02 (commit `2aaf327`). That branch is the real system. `main` and
+2026-10-05 (commit `a5f2c39` plus the working-tree changes listed in
+section 10.4). That branch is the real system. `main` and
 `master` on GitHub are older and do not have most of what follows.
 
 ---
@@ -107,14 +108,16 @@ interchangeable.
 
 | Server | File | Strategy | Use it for |
 |---|---|---|---|
-| **Central aggregator** | `central_server/fl_aggregator.py` | `ArgusStrategy` (FedAvg + checkpoints + metrics), Flask REST API on 8090 | Real rounds between real nodes. This is the one a deployed node talks to. |
-| **Simulator server** | `sim/fl.py serve` | Plain FedAvg | Quick local rounds, `scripts/fl_trial.sh`, and multi-client simulations |
+| **Central aggregator** | `central_server/fl_aggregator.py` | `ArgusStrategy` (robust aggregation + checkpoints + metrics), Flask REST API on 8090 | Real rounds between real nodes. This is the one a deployed node talks to. |
+| **Simulator server** | `sim/fl.py serve` | Robust aggregation (`--aggregation fedavg` for the baseline) | Quick local rounds, `scripts/fl_trial.sh`, and multi-client simulations |
 | Legacy server | `server/app.py` | FedAvg or FedProx | The original YOLO-weights design. Not used by the current node. |
 
-None of them use `src/federated/robust.py` yet. The Byzantine-robust
-aggregator is written and covered by 21 tests, but nothing outside the
-tests imports it. Wiring it into the central aggregator's strategy is the
-next piece of planned work.
+The first two, and the minimal `src/federated/server.py`, share one
+strategy class: `RobustFedAvg` in `src/federated/robust_strategy.py`
+(section 5.10). It screens every update through `src/federated/robust.py`
+before averaging. Plain FedAvg stays available behind one switch
+(`aggregation="fedavg"`), so the comparison study runs both arms through
+identical server code.
 
 ---
 
@@ -138,8 +141,9 @@ central_server/         the aggregator, Prometheus, Grafana, tunnel config
 server/                 LEGACY Flower server
 sim/                    node simulator and synthetic multi-site workload
 scripts/                runners, exports, benchmarks, tools
+deploy/                 systemd unit and settings template for a node
 static/index.html       the built-in live dashboard
-tests/                  303 tests, pytest
+tests/                  328 tests, pytest
 docs/                   this reference, guides, runbooks, proposal
 research/               WiFi CSI, sensor fusion, early FL prototype
 prometheus/             voice assistant orchestrator (separate tool)

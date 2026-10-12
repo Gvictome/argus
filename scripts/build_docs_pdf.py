@@ -45,6 +45,8 @@ DEFAULT_DOCS = [
     ("SUBSYSTEMS", "ARGUS Subsystems", "How the system fits together"),
     ("PROPOSAL", "ARGUS Project Proposal", "Revision 2 — Senior Design 2026"),
     ("DEMO_SCRIPT", "ARGUS Demo Script", "Walkthrough, queries, codebase"),
+    ("PRODUCTION_FL", "ARGUS Federated Learning in Production",
+     "The schedule, model versions, rollback, deployment and monitoring"),
 ]
 
 # Plain-language handouts, one topic per PDF so a reader can be given the

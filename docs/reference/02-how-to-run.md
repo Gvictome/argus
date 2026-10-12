@@ -231,7 +231,9 @@ curl -s localhost:8000/api/federated/status | python -m json.tool
 ```
 
 Rounds then run every 14 days at 02:00, and catch up promptly if the Pi
-was off across the due date. The scheduler has an "only while idle" check,
+was off across the due date. To run the node as a service that starts on boot,
+use `deploy/argus-node.service`; the full production setup (schedule,
+model versions, rollback, monitoring) is in `docs/PRODUCTION_FL.md`. The scheduler has an "only while idle" check,
 but nothing feeds it motion yet (`notify_motion()` has no caller), so today
 it always reads idle; see [section 10](10-status-and-gaps.md). Training
 runs in a separate one-core process either way, so detection keeps going.
@@ -279,7 +281,7 @@ about real-world accuracy.
 
 ```bash
 python sim/run_node.py                                # one node at 12 FPS, one round
-python sim/run_node.py --clients 3 --rounds 6         # real FedAvg across 3 clients
+python sim/run_node.py --clients 3 --rounds 6         # real rounds across 3 clients, robust aggregation
 python sim/run_node.py --profile pi5-threat-on-cpu    # the risky configuration
 python sim/run_node.py --pipelined --cores 4          # overlap the accelerator, Pi core count
 ```
@@ -352,7 +354,7 @@ python -m pytest tests/test_threat.py -q          # one file
 python -m pytest -q -k "gate"                     # by name
 ```
 
-303 tests, about 100 seconds on the development laptop. Gate any push on
+328 tests, about 60 to 90 seconds on the development laptop. Gate any push on
 the exit code, not on reading the output. Details: [section 9](09-tests.md).
 
 ---

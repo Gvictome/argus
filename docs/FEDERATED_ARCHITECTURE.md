@@ -95,6 +95,22 @@ cheapest first, each defending a different failure:
 Then a **validation gate** refuses to promote a candidate that scores
 worse than the model it would replace.
 
+### The gate's tie-break
+
+Balanced accuracy is the headline metric, and with four represented
+classes it only moves in steps of 0.25 — so two genuinely different
+models routinely score the same. When they do, cross-entropy loss
+decides: a candidate more than 5% worse on loss is rejected even though
+balanced accuracy did not move.
+
+This came from round 2 on 2026-09-20, which the gate accepted at 0.75 vs
+0.75 while its loss went 0.1941 → 0.2529. Balanced accuracy alone cannot
+see a model becoming less certain about the same predictions; loss can.
+
+A candidate that clearly *improves* balanced accuracy is promoted whatever
+its loss does. The tie-break only decides rounds the headline metric
+cannot, and `accept_candidate(loss_tolerance=...)` sets the margin.
+
 ### Why deltas, not weights
 
 Screening operates on `client_weights - global_weights`, not raw weights.
@@ -207,9 +223,13 @@ Stated because a judge will ask, and because
 - **The validation set is not defined.** `validate_candidate()` is
   implemented and tested; choosing the held-out set it scores against is
   still open, and the gate is only as good as that set.
-- **Robust aggregation is not yet wired into the Flower server.**
-  `src/federated/robust.py` is complete and tested standalone;
-  `central_server/fl_aggregator.py` still runs stock `FedAvg`.
+- **Robust aggregation needs three or more nodes to use its strongest
+  filters.** `src/federated/robust_strategy.py` runs `robust.py` inside
+  every Flower server (`central_server/fl_aggregator.py`, `sim/fl.py`,
+  `src/federated/server.py`), with plain FedAvg kept behind
+  `aggregation="fedavg"` as the comparison baseline. Below three
+  contributors the direction and trimming filters are skipped and the
+  round report says so.
 
 The first three are the standard next steps for a production federated
 system, and they are the right content for the roadmap slide.

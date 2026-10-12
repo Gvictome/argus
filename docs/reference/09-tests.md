@@ -9,9 +9,9 @@ python -m pytest tests/test_threat.py -q  # one file
 python -m pytest -q -k "gate"             # by name
 ```
 
-**Last full run: 2026-10-02, branch `feat/threat-detection` at `2aaf327`,
-Windows 11, Python 3.12, CPU-only torch: 303 passed, 0 failed, 0 skipped,
-97 s.**
+**Last full run: 2026-10-05, branch `feat/threat-detection` at `a5f2c39`
+plus the working-tree changes in section 10.4, Windows 11, CPU-only torch:
+328 passed, 0 failed, 0 skipped, 56 s.**
 
 Prerequisites, all in `requirements.txt` and all needed for a clean run:
 
@@ -44,12 +44,14 @@ are replaced by stubs almost everywhere, so most tests need no weights.
 
 | File | Tests | Covers |
 |---|---|---|
-| `test_pipeline_changes.py` | 46 | The September changes, each pinned: face stage deprecated, downscaled motion, the detection worker, file camera source, **the model gate** (first model accepted and persisted, regressing candidate rejected, head restored at startup), dashboard corrections to labels, motion segments, head weight isolation, the motion gate, snapshots while the worker owns the camera, camera colour order, the ARGUS class taxonomy, model selection, stills and clips, fixed-shape exports |
+| `test_pipeline_changes.py` | 50 | The September changes, each pinned: face stage deprecated, downscaled motion, the detection worker, file camera source, **the model gate** (first model accepted and persisted, regressing candidate rejected, loss breaks a balanced-accuracy tie, a clear accuracy gain is taken despite worse loss, head restored at startup), dashboard corrections to labels, motion segments, head weight isolation, the motion gate, snapshots while the worker owns the camera, camera colour order, the ARGUS class taxonomy, model selection, stills and clips, fixed-shape exports |
 | `test_threat.py` | 41 | Class index pinning, construction errors, whole-frame threat detection, crop padding and clamping, the cascade stage, status, overlay colour and dedup |
 | `test_jetson.py` | 35 | Board detection from the device tree, backend selection, the GStreamer CSI pipeline, the camera registry, Hailo export probing, camera state |
 | `test_auth.py` | 33 | Login, protected endpoints refuse without a token and accept with one, open endpoints stay open, logout, auth disabled mode, PBKDF2 hashing |
-| `test_fl_schedule.py` | 24 | Interval and due-time arithmetic, persistence across restarts, the idle gate, status, round outcomes (failure does not consume the interval, success advances it, disabled FL does not run) |
+| `test_fl_schedule.py` | 26 | Interval and due-time arithmetic, persistence across restarts, the idle gate, status, round outcomes (failure does not consume the interval, an unreachable aggregator through the real runner is retried, a gate rejection still counts as a round, success advances it, disabled FL does not run) |
 | `test_robust_aggregation.py` | 21 | Structural, norm and direction defences, the consensus floor below 3 clients, aggregation outcome, `validate_candidate` |
+| `test_robust_strategy.py` | 11 | The Flower strategy: a sign-flip attacker is left out of the round's model, the `fedavg` switch reproduces stock FedAvg, the same attack moves FedAvg but not robust, nothing surviving keeps the current model, the reference is the model sent out, duplicate node names, metrics averaged over kept updates, a failing report callback, the central server reading `ARGUS_AGGREGATION` |
+| `test_model_versions.py` | 8 | Accepted versions archived and rejected ones not, rollback restores weights as a new version and survives restart, unknown or path-like labels refused, archive pruning, the versions and rollback routes, the aggregator's version counter resuming and never moving backwards |
 | `test_face_recognition.py` | 20 | Deprecated face path: reset, enroll, recognise, remove, availability |
 | `test_event_recorder.py` | 18 | Triggers, pre-roll, post-roll and cooldown, output files |
 | `test_annotate.py` | 11 | Box drawing and label text |
@@ -68,8 +70,11 @@ startup), the video ingest, and the unreachable-aggregator timeout.
 
 * Real hardware: Picamera2, the Hailo, the Jetson CSI path. Covered by
   stubs; verified by hand on the Pi.
-* `central_server/fl_aggregator.py` has no unit tests. It is exercised by
-  `scripts/fl_trial.sh` and the hardware runs.
+* `central_server/fl_aggregator.py` has three tests (its aggregation
+  setting and the version counter); the strategy it inherits is tested in
+  `test_robust_strategy.py`.
+  The REST API and checkpointing are exercised by `scripts/fl_trial.sh` and
+  the hardware runs.
 * `sim/` has no unit tests. It is exercised by running it.
 * Auth on the federated and dashboard routers, because there is none
   (section 6.4). A test that those routes return 401 with

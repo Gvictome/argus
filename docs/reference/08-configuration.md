@@ -112,6 +112,7 @@ environment variables.
 | Rounds per session | 50 | **5** | `ARGUS_ROUNDS` (`-Rounds`, default 5) |
 | Local epochs sent to clients | 3 | **6** | none |
 | Auth token | empty | empty | `ARGUS_AUTH_TOKEN` (`-Token`) |
+| Aggregation | `robust` | `robust` | `ARGUS_AGGREGATION` (`-Aggregation robust` or `fedavg`) |
 
 `ARGUS_SERVE_FOREVER` (default `true`) starts a new session when one
 finishes, so a node on a 14-day schedule still finds the server.

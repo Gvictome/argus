@@ -121,6 +121,9 @@ quote laptop numbers as Pi numbers.
    Real doorstep parcels need a custom-trained detector.
 4. **Averaging across dissimilar sites** produced a worse model in testing.
    The gate catches it; making it actually work is research.
+   The aggregator now screens every update before averaging
+   (`src/federated/robust_strategy.py`), but with fewer than three nodes
+   it can only catch broken or oversized updates, not disagreeing ones.
 5. **Dashboard authentication.** The dashboard does not send its token to
    the backend. Fine on a private network, must be fixed before exposing
    anything to the internet.
