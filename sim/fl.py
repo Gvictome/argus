@@ -9,6 +9,7 @@ cores through the OS scheduler, which is the contention being measured.
     python sim/fl.py serve  --rounds 5 --clients 1
     python sim/fl.py serve  --rounds 5 --clients 3 --aggregation fedavg
     python sim/fl.py client --site driveway --epochs 4
+    python sim/fl.py client --store data/datasets/meva/events/G336 --epochs 3
 """
 
 import os
@@ -26,16 +27,19 @@ import argparse
 import json
 import sys
 import time
+import types
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import flwr as fl
+import numpy as np
 
 import workload
 from head import FederatedHead
 from src.federated.robust_strategy import AGGREGATIONS, RobustFedAvg
+from src.federated.store import SampleStore
 
 EVENTS = Path(__file__).resolve().parent / "_run" / "fl_events.jsonl"
 
@@ -47,16 +51,50 @@ def emit(**kw):
         f.write(json.dumps(kw) + "\n")
 
 
-class ArgusHeadClient(fl.client.NumPyClient):
-    """Mirrors src/federated/client.py, with the head in place of YOLO."""
+def load_store_split(store_path, seed=1):
+    """Train/validation arrays from a SampleStore (e.g. a MEVA camera).
 
-    def __init__(self, site_key, samples, epochs, seed):
-        self.site = workload.SITES[site_key]
-        X, y = workload.generate(self.site, samples, seed=seed)
-        self.Xt, self.yt, self.Xv, self.yv = workload.split(X, y, seed=seed)
+    `store_path` is a samples.jsonl or the directory holding it. Rows whose
+    meta.split is "holdout" form the validation set, so whole clips are held
+    out (scripts/meva_to_events.py). A store without split tags falls back to
+    the random split the synthetic sites use.
+    """
+    path = Path(store_path)
+    if path.is_dir():
+        path = path / "samples.jsonl"
+    if not path.exists():
+        raise FileNotFoundError(f"no sample store at {path}")
+    rows = [r for r in SampleStore(path)._rows if r.get("y") is not None]
+    if not rows:
+        raise ValueError(f"{path} has no labelled samples")
+    X = np.array([r["x"] for r in rows], dtype=np.float32)
+    y = np.array([r["y"] for r in rows], dtype=np.int64)
+    hold = np.array([r.get("meta", {}).get("split") == "holdout" for r in rows])
+    if hold.any() and (~hold).any():
+        return X[~hold], y[~hold], X[hold], y[hold]
+    return workload.split(X, y, seed=seed)
+
+
+class ArgusHeadClient(fl.client.NumPyClient):
+    """Mirrors src/federated/client.py, with the head in place of YOLO.
+
+    Data comes from a synthetic site (`site_key`) or, when `store` is given,
+    from a SampleStore on disk such as a MEVA camera's events.
+    """
+
+    def __init__(self, site_key, samples, epochs, seed, store=None):
+        if store:
+            name = Path(store).resolve()
+            name = (name.parent if name.suffix else name).name
+            self.site = types.SimpleNamespace(key=name)
+            self.Xt, self.yt, self.Xv, self.yv = load_store_split(store, seed=seed)
+        else:
+            self.site = workload.SITES[site_key]
+            X, y = workload.generate(self.site, samples, seed=seed)
+            self.Xt, self.yt, self.Xv, self.yv = workload.split(X, y, seed=seed)
         self.head = FederatedHead(seed=0)
         self.epochs = epochs
-        emit(kind="client_ready", site=site_key, train=len(self.Xt),
+        emit(kind="client_ready", site=self.site.key, train=len(self.Xt),
              val=len(self.Xv), params=self.head.n_params)
 
     def get_parameters(self, config):
@@ -126,9 +164,10 @@ def serve(args):
 
 
 def client(args):
-    c = ArgusHeadClient(args.site, args.samples, args.epochs, args.seed)
+    c = ArgusHeadClient(args.site, args.samples, args.epochs, args.seed,
+                        store=args.store)
     fl.client.start_client(server_address=args.address, client=c.to_client())
-    emit(kind="client_done", site=args.site)
+    emit(kind="client_done", site=c.site.key)
 
 
 if __name__ == "__main__":
@@ -142,6 +181,9 @@ if __name__ == "__main__":
                    help="robust screens updates first; fedavg is the unscreened baseline")
     c = sub.add_parser("client")
     c.add_argument("--site", default="driveway")
+    c.add_argument("--store", default=None,
+                   help="train from a SampleStore (samples.jsonl or its directory), "
+                        "e.g. data/datasets/meva/events/G336; overrides --site")
     c.add_argument("--samples", type=int, default=6000)
     c.add_argument("--epochs", type=int, default=4)
     c.add_argument("--seed", type=int, default=1)

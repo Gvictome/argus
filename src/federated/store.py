@@ -119,6 +119,37 @@ class SampleStore:
                 self._compact()
         return sid
 
+    def append_many(self, items) -> int:
+        """Append many (x, label, meta) samples with a single file write.
+
+        Same validation and row format as append(); for bulk imports such as
+        the MEVA converter, where one open() per row is the bottleneck on
+        Windows. Rows are validated first, so a bad vector writes nothing.
+        """
+        rows = []
+        base_n = self._next_n()
+        for i, (x, label, meta) in enumerate(items):
+            x = np.asarray(x, dtype=np.float32).reshape(-1)
+            if x.size != N_FEATURES:
+                raise ValueError(f"expected {N_FEATURES} features, got {x.size}")
+            if not np.isfinite(x).all():
+                raise ValueError("feature vector contains NaN or inf")
+            rows.append({
+                "id": f"{int(time.time() * 1000):x}-{len(self._rows) + i:05d}",
+                "n": base_n + i,
+                "t": time.time(),
+                "x": [round(float(v), 6) for v in x],
+                "y": int(label) if label is not None else None,
+                "meta": meta or {},
+            })
+        with self._lock:
+            self._rows.extend(rows)
+            with open(self.path, "a", encoding="utf-8") as f:
+                f.write("".join(json.dumps(r) + "\n" for r in rows))
+            if len(self._rows) > self.max_samples:
+                self._compact()
+        return len(rows)
+
     def set_label_by_n(self, n: int, label: int, note: Optional[str] = None) -> bool:
         with self._lock:
             r = self.by_n(n)

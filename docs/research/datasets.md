@@ -46,6 +46,20 @@ tracks, so detection can be skipped for the benchmark:
 4. **Holdout.** Hold out whole clips, never random events from the same clip. Neighbouring events from one clip are near-duplicates and leak.
 5. **Second pass, after the benchmark works:** run the clips through ARGUS's own YOLO (`scripts/ingest_video.py`) instead of the ground-truth tracks. The gap between the two runs shows how much detector error costs the head.
 
+### Converter as built (`scripts/meva_to_events.py`, logic in `src/federated/meva.py`)
+
+```
+python scripts/meva_to_events.py --annotations data/datasets/meva/repo/annotation/DIVA-phase-2/MEVA --camera G336
+```
+
+Writes `data/datasets/meva/events/<camera>/samples.jsonl` (one `SampleStore`, each row tagged `meta.split` train or holdout and `meta.clip`) and `holdout.json` (holdout clip list, seed, thresholds, active hours). Train a client from it with `python sim/fl.py client --store data/datasets/meva/events/G336`; rows tagged holdout become that client's validation set.
+
+- **Events.** One per track, built with `features.Track` and `features.extract` exactly as `collector.py` does: boxes normalised by 1920x1080 (overhanging boxes clipped), one `update()` per detection, tracks under 3 updates dropped, confidence 1.0, features taken at the track's last-seen time. The 30 fps annotation is thinned to 10 fps (`--det-fps`) so velocity is per detector step, not per video frame. Timestamp is clip start plus frame / 30 (30 fps confirmed from the `ts1` seconds field in the files that carry it).
+- **Classes.** person to 0, vehicle to 1, bag to 3 (package). bicycle, other and receptacle are dropped and counted; no ARGUS class fits them. MEVA has no animals.
+- **Anomaly rule (fixed before any model was trained).** Label 4 if any of: (a) the event's class is under 2% of that camera's events; (a) it takes part in an activity under 1% of that camera's activity participations; (b) its clock hour is inactive for that camera, meaning under 2% of the busiest hour's event count. Otherwise the label is the class index. Statistics use the whole camera, train and holdout clips together.
+- **Holdout.** Whole clips, seeded permutation of the sorted clip names (`--holdout-frac 0.2 --seed 0`).
+- **Honest caveats.** The hour threshold started at 10%; the first G336 run flagged hours 12-13 as off-hours, which was a sampling artifact of which clips were downloaded, so it was lowered to 2% before any training. MEVA is daytime only, so rule (b) is close to vacuous on G336. Anomaly here means rare at this camera, not harmful, and the label is a function of class, activity and hour, so a head can partly learn the rule rather than the scene. The activity rule uses ground-truth activity labels the live node will never have; the head only sees the 19 features.
+
 ShanghaiTech is test-only: its labelled abnormal events score whether the head flags the abnormal events in scenes it was not trained on.
 
 ## Running it
