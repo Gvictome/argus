@@ -20,6 +20,10 @@ it was accepted at 0.75 vs 0.75 while its loss went 0.1941 -> 0.2529. A
 candidate that clearly improves balanced accuracy is taken regardless of
 loss; the tie-break only decides rounds that the headline metric cannot.
 
+A candidate must also reach FL_MIN_ANOMALY_RECALL on the anomaly class: a
+head can hold its balanced accuracy while missing the events the product
+exists to catch. This applies to the first model too.
+
 Accepted weights are written to DATA_DIR/fl_head.npz and restored at
 startup, so an update survives a restart. Every decision, accepted or not,
 is kept in DATA_DIR/fl_model_state.json.
@@ -199,13 +203,24 @@ def _score(head: FederatedHead, X, y) -> dict:
         "loss": round(loss, 4),
         "accuracy": round(acc, 4),
         "balanced_accuracy": round(head.balanced_accuracy(X, y), 4),
+        "anomaly_recall": (None if (r := head.anomaly_recall(X, y)) is None
+                           else round(r, 4)),
     }
 
 
 def accept_candidate(app, candidate_path, source: str,
                      tolerance: float = 0.01, extra: Optional[dict] = None,
-                     loss_tolerance: float = 0.05) -> dict:
-    """Validate a candidate against the live head; swap it in if it holds up."""
+                     loss_tolerance: float = 0.05,
+                     min_anomaly_recall: Optional[float] = None) -> dict:
+    """Validate a candidate against the live head; swap it in if it holds up.
+
+    Besides the balanced-accuracy and loss checks, a candidate must reach
+    `min_anomaly_recall` (default settings.FL_MIN_ANOMALY_RECALL) on the
+    anomaly class, first model included. Skipped when the held-out set has
+    no anomaly rows, since recall is then unmeasurable rather than zero.
+    """
+    if min_anomaly_recall is None:
+        min_anomaly_recall = settings.FL_MIN_ANOMALY_RECALL
     store = app.state.fl_store
     live: FederatedHead = app.state.fl_head
 
@@ -228,8 +243,15 @@ def accept_candidate(app, candidate_path, source: str,
     # make the margin vanishingly small.
     loss_margin = max(loss_tolerance * current["loss"], 1e-4)
 
+    recall = proposed["anomaly_recall"]
     reason = None
-    if first:
+    if recall is not None and recall < min_anomaly_recall:
+        accepted = False
+        reason = (
+            f"candidate anomaly recall {recall} is below the "
+            f"{min_anomaly_recall} floor"
+        )
+    elif first:
         accepted = True
     elif ba_delta < -tolerance:
         accepted = False
@@ -255,6 +277,7 @@ def accept_candidate(app, candidate_path, source: str,
         "candidate": proposed,
         "tolerance": tolerance,
         "loss_tolerance": loss_tolerance,
+        "min_anomaly_recall": min_anomaly_recall,
         "val_samples": int(len(Xv)),
         "at": time.time(),
         **(extra or {}),

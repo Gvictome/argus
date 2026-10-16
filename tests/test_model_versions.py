@@ -203,3 +203,59 @@ def test_aggregator_version_never_moves_backwards(tmp_path, monkeypatch):
     monkeypatch.setattr(agg, "_model_version", 12)
     np.savez(tmp_path / "model_round_0001_v3.npz", w0=np.zeros(1))
     assert agg.resume_model_version(5) == 12
+
+
+# --- anomaly-recall gate -----------------------------------------------------
+
+def test_scores_include_anomaly_recall(node, store, tmp_path):
+    app, ms = node
+    _, path = _trained(store, tmp_path, "cand.npz")
+
+    decision = ms.accept_candidate(app, path, "federated")
+
+    assert 0.0 <= decision["candidate"]["anomaly_recall"] <= 1.0
+    assert "anomaly_recall" in decision["current"]
+
+
+def test_candidate_below_anomaly_recall_floor_is_rejected(node, store, tmp_path):
+    app, ms = node
+    _, good = _trained(store, tmp_path, "good.npz")
+    ms.accept_candidate(app, good, "federated")
+
+    decision = ms.accept_candidate(app, good, "federated",
+                                   min_anomaly_recall=1.01)
+
+    assert decision["accepted"] is False
+    assert "anomaly recall" in decision["reason"]
+
+
+def test_first_model_must_also_clear_the_floor(node, store, tmp_path):
+    app, ms = node
+    _, good = _trained(store, tmp_path, "good.npz")
+
+    decision = ms.accept_candidate(app, good, "federated",
+                                   min_anomaly_recall=1.01)
+
+    assert decision["accepted"] is False
+    assert not ms.head_path().exists()
+
+
+def test_default_floor_still_passes_a_normally_trained_model(node, store, tmp_path):
+    app, ms = node
+    _, good = _trained(store, tmp_path, "good.npz")
+
+    decision = ms.accept_candidate(app, good, "federated")
+
+    assert decision["accepted"] is True
+    assert decision["candidate"]["anomaly_recall"] >= ms.settings.FL_MIN_ANOMALY_RECALL
+
+
+def test_floor_is_skipped_when_holdout_has_no_anomalies(node, tmp_path, monkeypatch):
+    """No anomaly rows means recall is unmeasurable, not zero."""
+    from src.federated.head import FederatedHead
+
+    head = FederatedHead(seed=0)
+    X = np.random.default_rng(0).normal(size=(20, 19)).astype("float32")
+    y = np.zeros(20, dtype=int)
+
+    assert head.anomaly_recall(X, y) is None

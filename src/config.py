@@ -168,6 +168,13 @@ class Settings:
     # between rounds to be worth aggregating, and it keeps training off
     # the demo unit during showcase season.
     FL_ROUND_INTERVAL_DAYS: int = 14
+    # Minimum recall on the anomaly class a candidate must reach on the
+    # node's held-out samples before it can go live. Balanced accuracy
+    # averages the classes, so a head can keep its score while quietly
+    # missing the events the product exists to catch. 0.5 is a floor, not a
+    # target: the simulator's heads sit around 0.72, so anything healthy
+    # clears it. Set to 0 to disable.
+    FL_MIN_ANOMALY_RECALL: float = 0.5
     FL_TRAINING_DIR: Optional[Path] = None  # set in __post_init__
     # Persisted last-round timestamp. Without this the interval restarts
     # on every reboot and a regularly-restarted host never runs a round.
@@ -239,6 +246,7 @@ class Settings:
             FL_MIN_SAMPLES=int(os.getenv("FL_MIN_SAMPLES", 50)),
             FL_ROUND_HOUR=int(os.getenv("FL_ROUND_HOUR", 2)),
             FL_ROUND_INTERVAL_DAYS=int(os.getenv("FL_ROUND_INTERVAL_DAYS", 14)),
+            FL_MIN_ANOMALY_RECALL=float(os.getenv("FL_MIN_ANOMALY_RECALL", 0.5)),
             # Cameras: "sensor_id:name" comma-separated. The Orin has two
             # CSI connectors, so the demo host runs "0:front,1:back".
             CAMERA_SENSORS=os.getenv("CAMERA_SENSORS", ""),

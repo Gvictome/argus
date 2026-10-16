@@ -16,11 +16,11 @@ at the end of a run about framework overhead.
 """
 
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 
-from src.federated.features import N_CLASSES, N_FEATURES
+from src.federated.features import ANOMALY, N_CLASSES, N_FEATURES
 
 HIDDEN = (384, 384, 128)
 
@@ -122,6 +122,13 @@ class FederatedHead:
             if m.any():
                 accs.append(float((pred[m] == c).mean()))
         return float(np.mean(accs)) if accs else 0.0
+
+    def anomaly_recall(self, X, y) -> Optional[float]:
+        """Recall on the anomaly class; None when `y` has no anomaly rows."""
+        m = y == ANOMALY
+        if not m.any():
+            return None
+        return float((self.predict(X)[m] == ANOMALY).mean())
 
     def fit(self, X, y, epochs: int = 1, batch: int = 64, seed: int = 0) -> dict:
         rng = np.random.default_rng(seed)
