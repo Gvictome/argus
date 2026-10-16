@@ -276,6 +276,12 @@ def create_app() -> FastAPI:
             # the whole node down on startup, so FL_ENABLED=true never
             # booted. stop() is sync for the same reason.
             app.state.fl_scheduler.start()
+            # Feed the idle gate: without this notify_motion() had no
+            # caller, is_idle() was always True, and a round could train
+            # while the camera was busy.
+            detection_service.attach_motion_listener(
+                app.state.fl_scheduler.notify_motion
+            )
             logger.info("Federated cron on: every %d days at %02d:00, server %s",
                         settings.FL_ROUND_INTERVAL_DAYS, settings.FL_ROUND_HOUR,
                         settings.FL_SERVER_URL)
@@ -313,6 +319,8 @@ def create_app() -> FastAPI:
         # cancels the polling task rather than awaiting it.
         scheduler = getattr(app.state, "fl_scheduler", None)
         if scheduler is not None:
+            if hasattr(app.state, "detection_service"):
+                app.state.detection_service.attach_motion_listener(None)
             scheduler.stop()
 
     return app

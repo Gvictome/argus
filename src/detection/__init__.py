@@ -239,6 +239,9 @@ class DetectionService:
         self.face_recognizer = None   # FaceRecognitionService (set via attach_face_recognizer)
         self.collector = None         # EventCollector (set via attach_collector)
         self.threat_classifier = None  # ThreatClassifier (set via attach_threat_classifier)
+        # Zero-arg callable fired when a frame shows activity. Injected (not
+        # imported) so detection never depends on the federated package.
+        self.motion_listener = None
         self.previous_frame = None    # for frame differencing
         self.backend = "none"         # "hailo" | "cpu" | "none"
         self._initialized = False
@@ -538,6 +541,15 @@ class DetectionService:
         self.collector = collector
         logger.info("EventCollector attached to DetectionService")
 
+    def attach_motion_listener(self, listener) -> None:
+        """
+        Register a zero-argument callable fired on every frame with activity.
+
+        The FL scheduler's idle gate hangs off this, so training is deferred
+        while the camera is busy. Pass None to detach.
+        """
+        self.motion_listener = listener
+
     def attach_threat_classifier(self, classifier) -> None:
         """
         Attach a ThreatClassifier for the dangerous-person cascade stage.
@@ -638,6 +650,15 @@ class DetectionService:
             # alone rather than behind a COCO human box. Gating it on one
             # cost 20% of true positives on the upstream test set.
             all_detections.extend(self.detect_threats(frame))
+
+        # Tell the listener the camera is busy. Wrapped for the same reason
+        # as the collector: a listener fault must not stop detection.
+        listener = getattr(self, "motion_listener", None)
+        if listener is not None and all_detections:
+            try:
+                listener()
+            except Exception as exc:
+                logger.warning("Motion listener failed: %s", exc)
 
         # Feed the collector so resolved tracks become federated training
         # samples. Wrapped because a collector fault must never take down
