@@ -36,7 +36,9 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 import numpy as np
-from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
+
+from src.api.auth import require_auth, websocket_authorized
 from pydantic import BaseModel
 
 from src.config import settings
@@ -269,7 +271,8 @@ def _resolve_label(action: str, label: Optional[str], current: dict) -> int:
     return _resolve_label("correct", None, current)
 
 
-@router.post("/api/events/{event_id}/label", tags=["Dashboard"])
+@router.post("/api/events/{event_id}/label", tags=["Dashboard"],
+             dependencies=[Depends(require_auth)])
 async def label_event(event_id: int, body: LabelBody, request: Request):
     """Confirm or correct one event. This is what produces training labels."""
     store = getattr(request.app.state, "fl_store", None)
@@ -306,6 +309,12 @@ async def events_socket(websocket: WebSocket):
     to it: at a few events a minute the difference is invisible, and it
     keeps the collector free of socket plumbing.
     """
+    # require_auth needs a Request, which a websocket does not have, so the
+    # same token check runs here, before accept(). 1008 = policy violation.
+    if not websocket_authorized(websocket):
+        await websocket.close(code=1008)
+        return
+
     await websocket.accept()
     app = websocket.app
     store = getattr(app.state, "fl_store", None)

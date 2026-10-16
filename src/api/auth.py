@@ -162,6 +162,27 @@ async def require_auth(
     return user_id
 
 
+def websocket_authorized(websocket) -> bool:
+    """
+    The websocket counterpart of `require_auth`.
+
+    Accepts a bearer header or `?token=` (browsers cannot set headers on a
+    WebSocket). Always True when `AUTH_REQUIRED` is false; fails closed when
+    auth is required but was never initialized.
+    """
+    if not settings.AUTH_REQUIRED:
+        return True
+    if _security is None:
+        return False
+    presented = websocket.query_params.get("token")
+    header = websocket.headers.get("authorization", "")
+    if header.lower().startswith("bearer "):
+        presented = header[7:].strip() or presented
+    if not presented:
+        return False
+    return _security.validate_token(presented) is not None
+
+
 async def optional_auth(
     creds: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
     token: Optional[str] = Query(None),

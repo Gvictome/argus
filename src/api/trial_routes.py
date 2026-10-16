@@ -22,7 +22,9 @@ from pathlib import Path
 from typing import List, Optional
 
 import numpy as np
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
+
+from src.api.auth import require_auth
 from pydantic import BaseModel
 
 from src.config import settings
@@ -31,7 +33,9 @@ from src.federated.features import LABEL_NAMES, N_CLASSES, N_FEATURES
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+# Every federated endpoint reads or mutates the model and sample store, so the
+# whole router sits behind require_auth (a no-op while AUTH_REQUIRED is false).
+router = APIRouter(dependencies=[Depends(require_auth)])
 BASE_DIR = Path(__file__).resolve().parents[2]
 
 # In-process state for the trial. Deliberately not in the database: this is

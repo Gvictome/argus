@@ -719,7 +719,7 @@ class FixResponse(BaseModel):
     error: Optional[str]
 
 
-@router.post("/api/errors/analyze", response_model=ErrorAnalysis, tags=["Error Agents"])
+@router.post("/api/errors/analyze", response_model=ErrorAnalysis, tags=["Error Agents"], dependencies=_PROTECTED)
 async def analyze_error(request: ErrorRequest):
     """
     Analyze an error message and get fix suggestions
@@ -742,7 +742,7 @@ async def analyze_error(request: ErrorRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/errors/fix", response_model=FixResponse, tags=["Error Agents"])
+@router.post("/api/errors/fix", response_model=FixResponse, tags=["Error Agents"], dependencies=_PROTECTED)
 async def fix_error(request: ErrorRequest):
     """
     Attempt to automatically fix an error
@@ -763,7 +763,7 @@ async def fix_error(request: ErrorRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/api/errors/history", tags=["Error Agents"])
+@router.get("/api/errors/history", tags=["Error Agents"], dependencies=_PROTECTED)
 async def get_error_history(limit: int = 10):
     """Get recent error analysis history"""
     try:
