@@ -62,6 +62,8 @@ def auth_on(monkeypatch, tmp_path):
 def auth_off(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "AUTH_REQUIRED", False)
     monkeypatch.setattr(settings, "DB_PATH", tmp_path / "b.db")
+    monkeypatch.setattr(settings, "FL_TRAINING_DIR", tmp_path / "training")
+    monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
     with TestClient(create_app()) as client:
         yield client
 

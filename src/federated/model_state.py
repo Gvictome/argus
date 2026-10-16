@@ -243,16 +243,17 @@ def accept_candidate(app, candidate_path, source: str,
     # make the margin vanishingly small.
     loss_margin = max(loss_tolerance * current["loss"], 1e-4)
 
-    recall = proposed["anomaly_recall"]
+    recall = proposed.get("anomaly_recall")
+    below_floor = recall is not None and recall < min_anomaly_recall
+    floor_reason = (
+        f"candidate anomaly recall {recall} is below the "
+        f"{min_anomaly_recall} floor"
+    )
+
     reason = None
-    if recall is not None and recall < min_anomaly_recall:
-        accepted = False
-        reason = (
-            f"candidate anomaly recall {recall} is below the "
-            f"{min_anomaly_recall} floor"
-        )
-    elif first:
-        accepted = True
+    if first:
+        accepted = not below_floor
+        reason = floor_reason if below_floor else None
     elif ba_delta < -tolerance:
         accepted = False
         reason = (
@@ -266,6 +267,9 @@ def accept_candidate(app, candidate_path, source: str,
             f"rose {current['loss']} -> {proposed['loss']}, past the "
             f"{loss_margin:.4f} tie-break margin"
         )
+    elif below_floor:
+        accepted = False
+        reason = floor_reason
     else:
         accepted = True
 
