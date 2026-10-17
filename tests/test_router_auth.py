@@ -130,16 +130,10 @@ def test_every_mounted_http_route_is_guarded_or_allowlisted(auth_on):
     """Fail closed: a new unguarded route breaks this until it is decided."""
     from fastapi.routing import APIRoute
 
-    # Read-only status and listing endpoints that routes.py already leaves
-    # open (a decision for the owner, flagged in the hardening notes), plus
-    # the auth endpoints themselves.
+    # Health/status for probes, the static dashboard, and the auth endpoints.
     open_paths = {
-        "/", "/api/status", "/api/detection/status", "/api/auth/login",
-        "/api/auth/me", "/api/auth/logout", "/api/login",
-        "/api/dashboard/status", "/api/camera/status", "/api/cameras",
-        "/api/cameras/{name}/status", "/api/federated/status",
-        "/api/devices", "/api/devices/{device_id}", "/api/automations",
-        "/api/events", "/api/events/{event_id}", "/api/agents/status",
+        "/", "/api/status", "/api/auth/login", "/api/auth/me",
+        "/api/auth/logout", "/api/login", "/api/dashboard/status",
     }
     leaks = []
     for route in auth_on.app.routes:

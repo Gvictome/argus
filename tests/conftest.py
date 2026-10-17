@@ -16,3 +16,16 @@ os.environ.setdefault("DETECTION_AUTOSTART", "false")
 # automatically, making backend-dependent assertions pass or fail depending
 # on what happens to be on the developer's disk.
 os.environ.setdefault("OBJECT_BACKEND", "pt")
+
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _reset_login_limiter():
+    """Failed-login counters are process-wide; keep tests independent."""
+    from src.api.rate_limit import reset_login_limiter
+
+    reset_login_limiter()
+    yield
+    reset_login_limiter()

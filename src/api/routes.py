@@ -101,7 +101,7 @@ async def get_status(request: Request):
 # Camera
 # ============================================================================
 
-@router.get("/api/camera/status", tags=["Camera"])
+@router.get("/api/camera/status", tags=["Camera"], dependencies=_PROTECTED)
 async def camera_status():
     """Get camera status"""
     from src.camera import camera_service
@@ -256,7 +256,7 @@ def _require_camera(name: str):
     return cam
 
 
-@router.get("/api/cameras", tags=["Camera"])
+@router.get("/api/cameras", tags=["Camera"], dependencies=_PROTECTED)
 async def list_cameras():
     """Every configured camera, and what board we are on."""
     return _registry().status()
@@ -278,7 +278,7 @@ async def init_all_cameras():
     }
 
 
-@router.get("/api/cameras/{name}/status", tags=["Camera"])
+@router.get("/api/cameras/{name}/status", tags=["Camera"], dependencies=_PROTECTED)
 async def camera_status_by_name(name: str):
     return _require_camera(name).get_status()
 
@@ -364,7 +364,7 @@ async def list_recordings(request: Request, limit: int = 20):
     }
 
 
-@router.get("/api/federated/status", tags=["Federated"])
+@router.get("/api/federated/status", tags=["Federated"], dependencies=_PROTECTED)
 async def federated_status(request: Request):
     """
     FL schedule state: when the last round ran and when the next is due.
@@ -388,7 +388,7 @@ async def federated_status(request: Request):
 # Detection
 # ============================================================================
 
-@router.get("/api/detection/status", tags=["Detection"])
+@router.get("/api/detection/status", tags=["Detection"], dependencies=_PROTECTED)
 async def detection_status(request: Request):
     """Detection status: backend, which stages are live, and real throughput."""
     from src.detection import detection_service
@@ -495,14 +495,14 @@ async def remove_face(face_id: str):
 # Automation
 # ============================================================================
 
-@router.get("/api/devices", response_model=List[DeviceState], tags=["Automation"])
+@router.get("/api/devices", response_model=List[DeviceState], tags=["Automation"], dependencies=_PROTECTED)
 async def list_devices():
     """List all connected devices"""
     # TODO: Query device registry
     return []
 
 
-@router.get("/api/devices/{device_id}", tags=["Automation"])
+@router.get("/api/devices/{device_id}", tags=["Automation"], dependencies=_PROTECTED)
 async def get_device(device_id: str):
     """Get device details"""
     # TODO: Query device by ID
@@ -516,7 +516,7 @@ async def control_device(device_id: str, action: str, value: Optional[str] = Non
     return {"device_id": device_id, "action": action, "value": value, "success": False}
 
 
-@router.get("/api/automations", tags=["Automation"])
+@router.get("/api/automations", tags=["Automation"], dependencies=_PROTECTED)
 async def list_automations():
     """List all automation rules"""
     return {"automations": [], "count": 0}
@@ -533,7 +533,7 @@ async def create_automation(name: str, trigger: dict, action: dict):
 # Events
 # ============================================================================
 
-@router.get("/api/events", tags=["Events"])
+@router.get("/api/events", tags=["Events"], dependencies=_PROTECTED)
 async def list_events(request: Request, limit: int = 50):
     """Detection events, newest first.
 
@@ -545,7 +545,7 @@ async def list_events(request: Request, limit: int = 50):
     return build_events(request, limit)
 
 
-@router.get("/api/events/{event_id}", tags=["Events"])
+@router.get("/api/events/{event_id}", tags=["Events"], dependencies=_PROTECTED)
 async def get_event(event_id: int, request: Request):
     """One event, in the same shape as the list."""
     from src.api.dashboard_routes import _event_from_row
@@ -621,18 +621,36 @@ async def login(body: LoginRequest, request: Request):
     if db is None:
         raise HTTPException(status_code=503, detail="Database unavailable")
 
-    user = db.get_user_by_username(body.username)
     client = request.client.host if request.client else None
+
+    from src.api.rate_limit import login_limiter
+    from src.config import settings as _s
+    retry_after = login_limiter.check(
+        client or "", body.username, _s.LOGIN_MAX_ATTEMPTS, _s.LOGIN_WINDOW_SECONDS)
+    if retry_after:
+        try:
+            db.log_audit(body.username, "login_throttled", "rate limited", client)
+        except Exception:
+            pass
+        raise HTTPException(
+            status_code=429,
+            detail="Too many failed login attempts. Try again later.",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    user = db.get_user_by_username(body.username)
 
     # One message and one code for "no such user" and "wrong password".
     # Distinguishing them tells an attacker which usernames are real.
     if user is None or not security.verify_password(body.password, user["password_hash"]):
+        login_limiter.record_failure(client or "", body.username)
         try:
             db.log_audit(body.username, "login_failed", "bad credentials", client)
         except Exception:
             pass
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
+    login_limiter.record_success(client or "", body.username)
     from src.config import settings
     token = security.generate_token(
         user_id=user["id"],
@@ -786,7 +804,7 @@ async def get_error_history(limit: int = 10):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/api/agents/status", tags=["Error Agents"])
+@router.get("/api/agents/status", tags=["Error Agents"], dependencies=_PROTECTED)
 async def get_agents_status():
     """Get status of all error-solving agents"""
     return {

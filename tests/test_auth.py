@@ -114,9 +114,9 @@ class TestProtectedEndpoints:
 
 
 class TestOpenEndpoints:
-    """Health and status stay open: they leak nothing and back the demo UI."""
+    """Health stays open: it leaks nothing and backs probes and the demo UI."""
 
-    @pytest.mark.parametrize("path", ["/", "/api/status", "/api/detection/status"])
+    @pytest.mark.parametrize("path", ["/", "/api/status"])
     def test_reachable_without_a_token(self, auth_on, path):
         assert auth_on.get(path).status_code == 200
 

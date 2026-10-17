@@ -142,6 +142,10 @@ class Settings:
     # Anything that exposes ARGUS beyond the LAN must set this true --
     # scripts/run_tunnel.sh refuses to start without it.
     AUTH_REQUIRED: bool = False
+    # Login brute-force limit: this many FAILED attempts within the window
+    # (per client IP and per username) returns HTTP 429 until it ages out.
+    LOGIN_MAX_ATTEMPTS: int = 5
+    LOGIN_WINDOW_SECONDS: int = 300
     # Comma-separated origins allowed to call the API cross-origin. Empty
     # by default: the built-in dashboard is same-origin and needs none.
     # Set this only for a separately-hosted frontend.
@@ -235,6 +239,8 @@ class Settings:
             THREAT_IMGSZ=int(os.getenv("THREAT_IMGSZ", 416)),
             # Security
             AUTH_REQUIRED=os.getenv("AUTH_REQUIRED", "false").lower() == "true",
+            LOGIN_MAX_ATTEMPTS=int(os.getenv("LOGIN_MAX_ATTEMPTS", 5)),
+            LOGIN_WINDOW_SECONDS=int(os.getenv("LOGIN_WINDOW_SECONDS", 300)),
             CORS_ORIGINS=os.getenv("CORS_ORIGINS", ""),
             # Federated Learning
             NODE_NAME=os.getenv("NODE_NAME", "Node A"),
