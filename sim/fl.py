@@ -40,9 +40,15 @@ import workload
 from head import FederatedHead
 from src.federated.robust_strategy import AGGREGATIONS, RobustFedAvg
 from src.federated.store import SampleStore
+from metrics import load_eval_sets, make_evaluate_fn
+from poison import MODES as POISON_MODES, poison_weights
 from workload_fine import load_site
 
-EVENTS = Path(__file__).resolve().parent / "_run" / "fl_events.jsonl"
+# ARGUS_FL_EVENTS lets one launch (scripts/demo_hybrid.py) write its own log
+# instead of appending to the shared sim/_run one.
+EVENTS = Path(os.environ.get(
+    "ARGUS_FL_EVENTS",
+    Path(__file__).resolve().parent / "_run" / "fl_events.jsonl"))
 
 
 def emit(**kw):
@@ -84,8 +90,10 @@ class ArgusHeadClient(fl.client.NumPyClient):
     """
 
     def __init__(self, site_key, samples, epochs, seed, store=None,
-                 taxonomy="coarse", classifier_acc=0.88):
+                 taxonomy="coarse", classifier_acc=0.88, node_id=None,
+                 poison="none"):
         n_features = None
+        self.poison = poison
         if store:
             name = Path(store).resolve()
             name = (name.parent if name.suffix else name).name
@@ -98,7 +106,8 @@ class ArgusHeadClient(fl.client.NumPyClient):
             self.Xt, self.yt, self.Xv, self.yv = workload.split(X, y, seed=seed)
         self.head = FederatedHead(seed=0, n_features=n_features)
         self.epochs = epochs
-        emit(kind="client_ready", site=self.site.key, train=len(self.Xt),
+        self.node_id = node_id or self.site.key
+        emit(kind="client_ready", site=self.site.key, poison=poison, train=len(self.Xt),
              val=len(self.Xv), params=self.head.n_params)
 
     def get_parameters(self, config):
@@ -106,6 +115,7 @@ class ArgusHeadClient(fl.client.NumPyClient):
 
     def fit(self, parameters, config):
         self.head.set_weights(parameters)
+        start = [np.array(w) for w in parameters]
         t = time.perf_counter()
         m = self.head.fit(self.Xt, self.yt, epochs=self.epochs)
         dt = time.perf_counter() - t
@@ -113,7 +123,11 @@ class ArgusHeadClient(fl.client.NumPyClient):
         bal = self.head.balanced_accuracy(self.Xv, self.yv)
         emit(kind="fit", site=self.site.key, secs=round(dt, 3),
              loss=round(loss, 4), acc=round(acc, 4), bal_acc=round(bal, 4))
-        return self.head.get_weights(), len(self.Xt), {
+        weights = poison_weights(self.poison, start, self.head.get_weights())
+        return weights, len(self.Xt), {
+            # Name the camera: Flower's connection id means nothing to the
+            # aggregator's report or to whoever reads it.
+            "node_id": self.node_id,
             "train_loss": float(m["loss"]),
             "fit_seconds": float(dt),
         }
@@ -143,9 +157,19 @@ def serve(args):
     def report(server_round, rep):
         emit(kind="aggregation", round=server_round, **rep.as_dict())
 
+    eval_fn = make_evaluate_fn(load_eval_sets([Path(p) for p in args.eval_store]))
+    if eval_fn is not None:
+        inner = eval_fn
+
+        def eval_fn(server_round, parameters, config):  # noqa: F811
+            loss, out = inner(server_round, parameters, config)
+            emit(kind="round_eval", round=server_round, loss=round(loss, 4), **out)
+            return loss, {"balanced_accuracy": out["balanced_accuracy"]}
+
     strategy = RobustFedAvg(
         aggregation=args.aggregation,
         on_report=report,
+        evaluate_fn=eval_fn,
         min_fit_clients=args.clients,
         min_evaluate_clients=args.clients,
         min_available_clients=args.clients,
@@ -170,7 +194,8 @@ def serve(args):
 def client(args):
     c = ArgusHeadClient(args.site, args.samples, args.epochs, args.seed,
                         store=args.store, taxonomy=args.taxonomy,
-                        classifier_acc=args.classifier_acc)
+                        classifier_acc=args.classifier_acc,
+                        node_id=args.node_id, poison=args.poison)
     fl.client.start_client(server_address=args.address, client=c.to_client())
     emit(kind="client_done", site=c.site.key)
 
@@ -184,6 +209,9 @@ if __name__ == "__main__":
     s.add_argument("--address", default="127.0.0.1:8080")
     s.add_argument("--aggregation", choices=AGGREGATIONS, default="robust",
                    help="robust screens updates first; fedavg is the unscreened baseline")
+    s.add_argument("--eval-store", nargs="*", default=[],
+                   help="MEVA store dirs whose holdout rows score the aggregated "
+                        "model every round (balanced accuracy, per-class recall)")
     c = sub.add_parser("client")
     c.add_argument("--site", default="driveway")
     c.add_argument("--store", default=None,
@@ -193,6 +221,10 @@ if __name__ == "__main__":
     c.add_argument("--epochs", type=int, default=4)
     c.add_argument("--seed", type=int, default=1)
     c.add_argument("--address", default="127.0.0.1:8080")
+    c.add_argument("--node-id", default=None,
+                   help="name reported to the aggregator (default: the store/site name)")
+    c.add_argument("--poison", choices=POISON_MODES, default="none",
+                   help="act as a malicious peer, to show the robust filters rejecting it")
     c.add_argument("--taxonomy", choices=("coarse", "fine"), default="coarse")
     c.add_argument("--classifier-acc", type=float, default=0.88,
                    help="simulated crop classifier accuracy (fine taxonomy only)")
