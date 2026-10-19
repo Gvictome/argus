@@ -26,9 +26,12 @@ def _he(shape, rng):
 
 
 class FederatedHead:
-    def __init__(self, seed: int = 0, lr: float = 3e-3):
+    def __init__(self, seed: int = 0, lr: float = 3e-3,
+                 n_features: int = N_FEATURES, n_classes: int = N_CLASSES):
         rng = np.random.default_rng(seed)
-        dims = (N_FEATURES,) + HIDDEN + (N_CLASSES,)
+        self.n_features = n_features
+        self.n_classes = n_classes
+        dims = (n_features,) + HIDDEN + (n_classes,)
         self.W = [_he((dims[i], dims[i + 1]), rng) for i in range(len(dims) - 1)]
         self.b = [np.zeros(dims[i + 1], dtype=np.float32) for i in range(len(dims) - 1)]
         self.lr = lr
@@ -113,7 +116,7 @@ class FederatedHead:
         """DETECTION_ACCURACY.md sec 0 is emphatic: on skewed data, quote this."""
         pred = self.predict(X)
         accs = []
-        for c in range(N_CLASSES):
+        for c in range(self.n_classes):
             m = y == c
             if m.any():
                 accs.append(float((pred[m] == c).mean()))

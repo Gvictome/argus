@@ -1,0 +1,27 @@
+### 1. Federated learning vs local-only
+- **The shared model alone plateaus.** Federated balanced accuracy stays around 0.81 regardless of data volume, while local-only climbs to 0.875 at 5,000 events per site. The sites disagree about what is abnormal (a vehicle is routine on the driveway and always wrong at the back door), and one averaged model cannot hold every site's rule. The per-site table shows the cost falls mostly on the back door (0.70 federated vs 0.76 local).
+- **Federation wins when data is scarce.** At 50 events per site, the federated model beats local-only on balanced accuracy (0.77 vs 0.73) and on anomaly recall (0.56 vs 0.44). A month-one camera has exactly this little data.
+- **Federated + local fine-tune is the best of both.** It is the top arm from 150 events upward (0.826 to 0.879 balanced accuracy) and has the best anomaly recall from 500 events upward. At 50 events, the plain federated model still has the best recall, so fine-tuning should wait until a site has a few hundred labelled events.
+- **Cold start is the strongest argument for FL.** A camera at a site the fleet has never seen gets 0.78 balanced accuracy and 0.73 anomaly recall on its first day. Local-only needs about 150 events to match the accuracy and about 1,500 to match the recall. Fine-tuning the fleet model is the best option at every local data size.
+
+### 1c. Fine taxonomy and site identity
+- The fine taxonomy (carrier, make, package size) raises balanced accuracy for every training method: +0.03 to +0.05 with a crop classifier that is 88% accurate, and still positive at 76%.
+- **A shared model cannot learn "this is the resident's car."** Federated scores 0.00 to 0.11 on household cars at night. Local fine-tuning with the fine taxonomy restores this to 0.95 to 1.00. Site-specific fine-tuning is needed for this feature to work at all.
+- **Trade-off:** fine-tuning makes a site forget some fleet knowledge about events it rarely sees. "Carrier truck out of its delivery window" falls from 0.97 (federated) to 0.72 after fine-tuning, and "stranger car at night" falls from 0.92 to 0.84. Fine-tuning needs a guard against this, such as fewer epochs, keeping the fleet model's anomaly flags as a second opinion, or regularizing toward the fleet weights.
+
+### 2. Frame rate while training
+- **Target build:** pi5-hailo (about 14.5 FPS ceiling) and the pipelined build (about 25 FPS ceiling) stay above 12 FPS while a real Flower round trains next to them. Training a 205K-parameter head on the CPU does not stop detection when the Hailo does the heavy work.
+- **Below target or marginal:** pi5-threat-on-cpu is below 12 FPS before training even starts (about 11 FPS ceiling). pi5-hailo-fine has about 13 FPS of ceiling, so any contention during training can push it under target. The CPU-only fallback runs at about 2.5 FPS either way.
+- **Read the percentages with care.** This simulator measures on the PC it runs on, so anything else using the CPU (a browser, a sync client) shows up as a training cost. Two runs on 2026-10-04 measured pi5-hailo at +0.1% and -8.1% during training. If the recovery phase does not return to the baseline, the drop was background load, not training. Which builds pass or fail 12 FPS was consistent across runs. The numbers that matter will come from a Pi 5.
+
+### 3. Poisoning resistance
+- **FedAvg (what the server runs today) is fragile.** One node sending NaN wipes the fleet model completely (0.00). A sign-flipped update drops balanced accuracy to 0.24. Its 1.00 anomaly recall in the heatmap is not a good result: the model flags nearly everything as an anomaly, which makes the alerts useless. A boosted "hide anomalies" update cuts anomaly recall from 0.64 to 0.11, meaning nearly 9 in 10 real anomalies would no longer be flagged on every camera.
+- **robust.py stops every loud attack tested.** It rejected the bad camera in 6 of 6 rounds for the NaN, noise, sign-flip and boosted attacks. With no attack it costs nothing (0.866 vs 0.863 balanced accuracy). Plain trimmed mean survives NaN but still lets a sign-flip through (anomaly recall pushed to 0.77 at the cost of balanced accuracy 0.78).
+- **The quiet attack gets through.** An unboosted "hide anomalies" camera looks like an honest one in norm and direction, so robust.py never rejected it. Anomaly recall fell from 0.64 to 0.59 under every defence. The validation gate did not catch it either, because it only checks balanced accuracy, and balanced accuracy barely moved (0.877).
+
+### Recommendations
+1. **Ship federated + per-site fine-tune, and start new cameras on the fleet model.** Gate fine-tuning on having a few hundred labelled events, and protect against forgetting rare fleet-learned anomalies.
+2. **Wire robust.py into `central_server/fl_aggregator.py` before any multi-site trial.** Under FedAvg, a single crashed node takes the whole fleet down.
+3. **Make the validation gate check anomaly recall, not just balanced accuracy.** Combined with the loss tie-break already on the to-do list, this is the cheapest defence against the quiet label-flip attack.
+4. **Compile the threat model for the Hailo, and pipeline the loop before adding the crop classifier.** Both failing configurations are timing problems the pipelined build has headroom for.
+5. **Replace the Table 11 budgets with Pi 5 + Hailo measurements** (`scripts/benchmark_classes.py`, then `sim/profiles.py`), and re-run Section 2 on the Pi itself.

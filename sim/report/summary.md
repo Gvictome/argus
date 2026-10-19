@@ -1,0 +1,6 @@
+| Question | Short answer |
+|---|---|
+| Does FL beat a node training alone? | **Yes for small data and new cameras. No for a mature site using the shared model as-is.** The winner at every data size is **federated + a short local fine-tune**, which matches or beats local-only from 50 events upward. |
+| What does a brand-new camera get? | The fleet model works on day one: **0.78 balanced accuracy and 0.73 anomaly recall with zero local events**, against 0.10 untrained. Local-only needs about 150 events to catch up on accuracy and about 1,500 to catch up on anomaly recall. |
+| Does detection keep running during training? | **Yes on the target build:** pi5-hailo and the pipelined build both stay above the 12 FPS target during a real Flower round (Section 2 table). It **does not hold 12 FPS** if the threat model stays on the CPU, and the crop classifier leaves the serial loop with little or no headroom. |
+| Can one bad camera poison the fleet? | **Yes with today's FedAvg server.** One crashed node destroys the model; one hostile node can cut anomaly recall from 0.64 to 0.11. **robust.py stops every loud attack tested**, at no accuracy cost, but it is not wired into the server yet, and a quiet label-flip attack still gets through every defence. |

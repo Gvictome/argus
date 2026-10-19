@@ -186,6 +186,10 @@ class Detection:
     # Raw COCO class id. "package" has no DetectionType, so the federated
     # head recognises it by id.
     coco_id: Optional[int] = None
+    # Crop classifier output for vehicles and packages, e.g.
+    # {"carrier": "ups", "make": "other", "confidence": 0.91}. None when no
+    # crop model is attached or the box was too small to classify.
+    subtype: Optional[dict] = None
 
 
 # Frames retained for the rolling FPS average. Short enough that the number
@@ -242,6 +246,7 @@ class DetectionService:
         # Zero-arg callable fired when a frame shows activity. Injected (not
         # imported) so detection never depends on the federated package.
         self.motion_listener = None
+        self.crop_classifier = None   # CropClassifier (set via attach_crop_classifier)
         self.previous_frame = None    # for frame differencing
         self.backend = "none"         # "hailo" | "cpu" | "none"
         self._initialized = False
@@ -560,6 +565,38 @@ class DetectionService:
         self.threat_classifier = classifier
         logger.info("ThreatClassifier attached to DetectionService")
 
+    def attach_crop_classifier(self, classifier) -> None:
+        """
+        Attach a CropClassifier (carrier / make / package size).
+
+        Args:
+            classifier: src.detection.crop_classifier.CropClassifier.
+        """
+        self.crop_classifier = classifier
+        logger.info("CropClassifier attached to DetectionService")
+
+    def classify_crops(self, frame: np.ndarray, detections: List[Detection]) -> None:
+        """
+        Fill Detection.subtype on vehicles and packages, in place.
+
+        A failure leaves subtype as None: losing the carrier or make is
+        recoverable, losing the detection is not.
+        """
+        if self.crop_classifier is None:
+            return
+        for kind in (DetectionType.VEHICLE, DetectionType.PACKAGE):
+            group = [d for d in detections if d.type == kind]
+            if not group:
+                continue
+            try:
+                results = self.crop_classifier.classify(
+                    frame, kind.value, [d.bbox for d in group])
+            except Exception as exc:
+                logger.warning("Crop classification failed: %s", exc)
+                return
+            for d, r in zip(group, results):
+                d.subtype = r
+
     def detect_threats(self, frame: np.ndarray) -> List[Detection]:
         """
         Find people carrying weapons, using the threat model's own boxes.
@@ -633,6 +670,7 @@ class DetectionService:
         # on it is never classified.
         if motion or not self.config.motion_gate:
             objects = self.detect_objects(frame)
+            self.classify_crops(frame, objects)
             all_detections.extend(objects)
 
             # Faces are the expensive stage, so normally they run only once

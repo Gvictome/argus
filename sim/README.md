@@ -153,3 +153,35 @@ on the Pi and edit `sim/profiles.py`.
 | `fl.py` | Flower server + client, run as separate processes |
 | `run_node.py` | Orchestrator, Prometheus surface, report |
 | `_run/fl_events.jsonl` | Raw per-round events from the last run |
+
+---
+
+## Fine taxonomy: carrier, make, package size
+
+`--taxonomy fine` swaps the coarse 19-feature workload for `workload_fine.py`:
+the same 19 features plus what a second-stage crop classifier would report for
+each vehicle or package box.
+
+| Slots | Values |
+|---|---|
+| carrier | none, ups, usps, fedex, amazon (vehicles, packages) |
+| make | nissan, toyota, honda, ford, chevrolet, tesla, other (vehicles) |
+| package size | mail, small, large (packages; mail is USPS only) |
+| crop confidence | 0 for people and animals |
+
+The crop classifier does not exist yet. It is simulated: labels come from the
+true subtype, features from a prediction that is right `--classifier-acc` of
+the time (default 0.88). A fourth site, `curbside` (mailbox, residents park
+there), is added. Delivery windows and per-site subtype mixes are simulation
+assumptions, not sourced figures.
+
+```bash
+python sim/compare_taxonomy.py                                  # coarse vs fine, acc sweep
+python sim/run_node.py --taxonomy fine --profile pi5-hailo-fine --clients 1
+python sim/run_node.py --taxonomy fine --clients 4 --rounds 5   # FedAvg over all 4 sites
+```
+
+`pi5-hailo-fine` adds a 6 ms accelerator stage for the crop classifier. That
+line is a budget estimate, not a measurement. The coarse generator is pinned
+byte-for-byte by `tests/test_sim_fine_taxonomy.py`, because
+`src/federated/features.py` mirrors it.
