@@ -56,7 +56,7 @@ made with one real node plus simulated MEVA peers (section 10.6).
 
 | Item | Where |
 |---|---|
-| The GitHub default branch (`master`) is a stale mirror. `main` was brought up to the showcase hardening line on 2026-10-19 (MAIN_HEAD) | Decide whether to retire `master` |
+| The GitHub default branch (`master`) is a stale mirror. `main` was brought up to the showcase hardening line on 2026-10-19 | Decide whether to retire `master` |
 | `docs/project/PROPOSAL.md` and `docs/project/SHOWCASE_PRD.md` still state 24-30 FPS; the target is now 8-12 FPS | Revise |
 | `docs/project/PROPOSAL.md` still lists face requirements FR-4/FR-5/PR-4/PR-7 and objective O2 as complete | Mark "implemented, measured, disabled for performance" and keep the 0.9996 LFW result |
 | `QUICKSTART.md`, `OVERVIEW.md`, guide 6, `FEDERATED_ARCHITECTURE.md` and `JETSON_MIGRATION.md` say rounds run only while idle / nothing is moving | True only once `notify_motion()` is wired |
