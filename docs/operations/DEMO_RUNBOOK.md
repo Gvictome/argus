@@ -9,7 +9,7 @@ node or on a laptop against a recorded video.
 
 | Change | Why it matters for the demo |
 |---|---|
-| **Face recognition deprecated** — off by default, nothing loads for it | Measured at 12–27× slower frame rate with it on. `insightface` is no longer in `requirements.txt`, so the Pi install no longer compiles it. |
+| **Face recognition deprecated** - off by default, nothing loads for it | Measured at 12–27× slower frame rate with it on. `insightface` is no longer in `requirements.txt`, so the Pi install no longer compiles it. |
 | **Detection runs continuously in the background** | Before, nothing was detected unless someone had the video stream open. Now events are collected whether or not anyone is watching (FR-19). |
 | **Only meaningful activity is stored** | One event per tracked object (not per frame); sustained motion becomes one `motion` event; flicker is discarded. |
 | **Federated updates go through a validation gate** | The averaged model replaces the live one only if it doesn't lower balanced accuracy on this node's own held-out samples. It persists across restarts. |
@@ -18,12 +18,120 @@ node or on a laptop against a recorded video.
 
 ---
 
+## What changed on 2026-10-18
+
+| Change | Why it matters for the demo |
+|---|---|
+| **One real node is the plan of record** | The second node's parts have not arrived. The showcase federation is one real node plus simulated MEVA peers (section H), not CIFAR-10 and not a synthetic corpus |
+| **Base detector locked: YOLOv8n** | The Hailo compile never happened, so the 10/11 rule's fallback applies (`docs/research/detector-comparison.md`). The Pi runs it on CPU (NCNN) |
+| **`scripts/demo_hybrid.py`** | One command starts the aggregator, the simulated peers, and (on a laptop) a stand-in for the real node, and prints each round's balanced accuracy, per-class recall and accepted/rejected updates |
+| **Nine MEVA cameras converted** | G299, G326, G328, G329, G330, G331, G336, G339, G340 under `data/datasets/meva/events/` (gitignored) |
+
+---
+
+## H · The single-node hybrid demo (showcase plan)
+
+One real node joins live federated rounds together with 4-8 simulated
+peers. Each peer is a MEVA camera (`sim/fl.py client --store
+data/datasets/meva/events/<camera>`), trained and screened by the same code
+as a real node, through the robust aggregator. With three or more
+contributors the direction and trimmed-mean filters are active.
+
+### H1 · Rehearse on the laptop (no Pi)
+
+The stand-in runs a video through the real detection pipeline
+(`scripts/ingest_video.py`, YOLOv8n) and trains on the result through the
+real node client (`src.federated.node_client`).
+
+```bash
+python scripts/demo_hybrid.py --standin media/vtest.avi --peers 6 --rounds 5
+python scripts/demo_hybrid.py --standin media/vtest.avi --peers 6 --rounds 5 --poison signflip
+```
+
+Allow about four minutes to the first round: ingest, then every Python
+process imports the Flower stack (about 40 s each on this laptop). Rounds
+themselves take seconds to a minute. A finished run leaves
+`sim/_run/hybrid/summary.json` and one log per process.
+
+Each round prints:
+
+```
+round 3: balanced accuracy 0.551   loss 0.255
+  recall: routine_person 1.00  routine_vehicle 1.00  routine_package 0.00  anomaly 0.21
+  per camera: G330 0.72  G299 0.73  G336 0.73  G339 0.52  G328 0.69
+  updates: accepted 6, rejected 1   [direction + trimmed-mean filters ON]
+  REJECTED mallory: update norm 69.06 exceeds 3.0x median 8.504
+```
+
+Round 0 is the untrained model. Balanced accuracy and recall are measured on
+the pooled clip-level holdout of the peers' cameras (whole clips no peer
+trained on). `--poison signflip|nan` adds one malicious peer (`mallory`);
+`none` is the default.
+
+Flags: `--peers N` (max = cameras converted), `--rounds`, `--epochs` (local,
+default 3), `--poison`, `--port` (8080), `--standin VIDEO`, `--max-frames`
+(stand-in video frames, default 600), `--run-dir`, `--events-root`.
+
+### H2 · Showcase day, with the Pi
+
+**Laptop** (aggregator and peers):
+
+```bash
+python scripts/demo_hybrid.py --peers 6 --rounds 5
+```
+
+It prints the Pi command, with the laptop's address filled in. **On the Pi**
+(node running, with labelled samples in `data/training/samples.jsonl`; see
+section C for seeding):
+
+```bash
+cd ~/argus && source .venv/bin/activate
+python -m src.federated.node_client --store data/training/samples.jsonl \
+    --init data/fl_head.npz --out data/fl_round \
+    --server <laptop-ip>:8080 --node-name pi-A
+```
+
+The aggregator listens on all interfaces whenever it expects an external
+node. Rounds start when every client is connected; if the Pi is missing the
+console says nothing more, so check `server.log`. Allow port 8080 through
+the laptop firewall.
+
+### H3 · When node B arrives
+
+Only one number changes:
+
+```bash
+python scripts/demo_hybrid.py --peers 6 --rounds 5 --real-nodes 2
+```
+
+The aggregator now waits for one more client. Node B runs the same
+`node_client` command with `--node-name pi-B` and its own `--store`. The
+peers, the poison toggle and the console are unchanged. Two real nodes is
+still below the three the direction and trimmed-mean filters need, which is
+why the simulated peers stay. (Verified on the laptop 2026-10-19 with the
+stand-in as node A and a second local `node_client` as node B.)
+
+### H4 · The 10/25 go-live or fallback decision, restated
+
+| | Go-live | Fallback |
+|---|---|---|
+| Condition | Node B built, boots, produces events by 10/25 | It is not |
+| Demo | Two real nodes + simulated peers (H3) | One real node + simulated peers (H2). **This is what is rehearsed and what the docs describe** |
+| Federation evidence | The same, plus a real two-node round | MEVA hybrid + `docs/research/fl-vs-base-meva.md` |
+| What is **not** the fallback | | CIFAR-10. It is retired as the benchmark (`docs/research/datasets.md`) and says nothing about ARGUS's task |
+
+Going live costs one flag and one cable. The fallback needs no extra
+preparation, so there is no reason to delay the decision past 10/25 for fear
+of losing the demo.
+
+---
+
 ## A · Mock demo on a laptop (no Pi needed)
 
 Everything real except the camera (a looping video) and the database
 (`data/mock`, isolated from real data).
 
-**Terminal 1 — node**
+**Terminal 1 - node**
 
 ```bash
 cd argus
@@ -35,7 +143,7 @@ python scripts/mock_demo.py --reset
 stage. Test video: `media/vtest.avi` (download it once from
 `https://github.com/opencv/opencv/raw/4.x/samples/data/vtest.avi`).
 
-**Terminal 2 — dashboard**
+**Terminal 2 - dashboard**
 
 ```bash
 git clone https://github.com/adam9798/argus-dashboard
@@ -55,7 +163,7 @@ Open `http://localhost:3000`, log in as `admin` / `argus-demo`.
 1. Status strip: live detection FPS, backend, model version.
 2. Event list fills as people cross the video.
 3. Click an event → **Confirm** or **Correct**. Correct accepts plain
-   English — "false alarm", "suspicious person", "delivery driver" — and
+   English - "false alarm", "suspicious person", "delivery driver" - and
    the operator's words are kept alongside the label.
 
 ---
@@ -88,7 +196,7 @@ The raw feed on its own, with boxes burned in, is at
 |---|---|---|
 | A still per event, taken at the object's largest | `DATA_DIR/snapshots/` | `media_path` on the `detection` row, served at `/api/events/{id}/snapshot` |
 | A clip per trigger, with pre- and post-roll | `MEDIA_DIR/events/` | a `clip` row, listed at `/api/clips` |
-| Sustained motion | — | a `motion` row, chunked every 60 s |
+| Sustained motion | - | a `motion` row, chunked every 60 s |
 
 Clips are off unless `RECORD_EVENTS=true` (`--record` for the mock demo).
 Stills are always kept: they cost about 30 KB each and are what make an
@@ -100,7 +208,7 @@ event reviewable rather than just a confidence number.
 
 Close every terminal first.
 
-**Terminal 1 — the node** (paste the whole block)
+**Terminal 1 - the node** (paste the whole block)
 
 ```bash
 cd ~/argus
@@ -120,7 +228,7 @@ python main.py
 The NCNN export takes about a minute once and is picked up automatically on
 every later start. Leave this window open.
 
-**Terminal 2 — check it**
+**Terminal 2 - check it**
 
 ```bash
 cd ~/argus
@@ -155,7 +263,7 @@ curl -sX POST localhost:8000/api/federated/samples/bootstrap \
      -H 'Content-Type: application/json' -d '{"site":"driveway","n":4000}'
 ```
 
-**Train locally first** — separates a model problem from a network problem:
+**Train locally first** - separates a model problem from a network problem:
 
 ```bash
 curl -sX POST localhost:8000/api/federated/head/train \
@@ -195,7 +303,8 @@ When `running` goes false, `result` holds the gate's decision:
 **A rejection is the gate working, not a failure.** A non-IID average can
 suit other sites and hurt this one; the gate keeps the working model.
 
-For real averaging, add a second site as another client:
+For real averaging, add a second site as another client (for the showcase
+use the hybrid demo instead, section H):
 
 ```bash
 python sim/fl.py serve --rounds 3 --clients 2 --address 0.0.0.0:8080
@@ -210,16 +319,16 @@ running throughout.
 ## C2 · A federated trial with nothing but the Pi
 
 The aggregator does not have to live on another machine. For a trial,
-run it on the node itself — three shells, all on the Pi.
+run it on the node itself - three shells, all on the Pi.
 
-**Shell 2 — the aggregator:**
+**Shell 2 - the aggregator:**
 
 ```bash
 cd ~/argus && source .venv/bin/activate
 python sim/fl.py serve --rounds 3 --clients 1 --address 127.0.0.1:8080
 ```
 
-**Shell 3 — seed, train, then join the round:**
+**Shell 3 - seed, train, then join the round:**
 
 ```bash
 cd ~/argus && source .venv/bin/activate
@@ -244,7 +353,7 @@ barely move. `model_version` on `/api/status` becomes `fl-r1`, `fl-r2`
 and so on each time the gate accepts an update, and the built-in page
 shows it.
 
-Do not claim that from the architecture — measure it. See **C5**.
+Do not claim that from the architecture - measure it. See **C5**.
 
 ---
 
@@ -254,10 +363,10 @@ Do not claim that from the architecture — measure it. See **C5**.
 It proves the averaging code runs, not that two cameras can disagree and
 be reconciled. A real second node is one ARGUS install with its own
 camera, its own sample store and its own name, and the laptop can be one
-without buying anything — `CAMERA_SOURCE` takes a webcam index or a video
+without buying anything - `CAMERA_SOURCE` takes a webcam index or a video
 file.
 
-**LAPTOP — terminal 1 (the second node, "Node B"):**
+**LAPTOP - terminal 1 (the second node, "Node B"):**
 
 ```powershell
 cd C:\Users\colab\argus\argus
@@ -280,7 +389,7 @@ can coexist on one machine; on the Pi, Node A stays on 8000.
 Swap `CAMERA_SOURCE` for `$env:CAMERA_INDEX = "0"` to use the laptop's
 webcam, which makes the two nodes genuinely see different scenes.
 
-**LAPTOP — terminal 2 (give it samples, then join the round):**
+**LAPTOP - terminal 2 (give it samples, then join the round):**
 
 ```powershell
 curl.exe -sX POST http://127.0.0.1:8001/api/federated/samples/bootstrap `
@@ -290,8 +399,8 @@ curl.exe -sX POST http://127.0.0.1:8001/api/federated/round `
   -d '{\"server\":\"10.0.0.239:8080\",\"epochs\":4}'
 ```
 
-Seed Node B from a *different* site than Node A — `yard` against Node A's
-`driveway` — or the two updates are near-identical and the average has
+Seed Node B from a *different* site than Node A - `yard` against Node A's
+`driveway` - or the two updates are near-identical and the average has
 nothing to reconcile. Sites are `driveway`, `backdoor` and `yard`; any
 other name is a 400 listing those three.
 
@@ -303,12 +412,12 @@ three the Byzantine filters need; say so.
 
 ## C5 · What training costs the detector
 
-Training is meant to be free — the local head trains in a worker thread,
+Training is meant to be free - the local head trains in a worker thread,
 a round runs as its own process. On the laptop that cost 0.1%. The Pi has
 four cores and no spare headroom, so measure it there rather than
 assuming it carries over.
 
-**PI — terminal 2 (with the node already running in terminal 1):**
+**PI - terminal 2 (with the node already running in terminal 1):**
 
 ```bash
 cd ~/argus && source .venv/bin/activate
@@ -328,7 +437,7 @@ change smaller than the baseline's own spread is labelled as such.
 
 Measured on the laptop against a looped clip (18.3s of training, 70
 samples): `capture_fps` held at 10.00 throughout, every change inside the
-baseline spread. That validates the method only — a file source plays at
+baseline spread. That validates the method only - a file source plays at
 the clip's own rate, so it cannot show headroom. **The Pi number is still
 to be taken.**
 
@@ -354,8 +463,8 @@ curl -s localhost:8000/api/detection/status | python -m json.tool
 
 `model` and `backend` report what is running. On the Pi's CPU, start at
 `yolov8n`; `yolov8s` is roughly 2–3× the work per frame. The measured
-ceiling on the Hailo is far higher — `yolov8m` ran at 76 FPS on the
-AI HAT+ 2 — but that needs the HEF compile.
+ceiling on the Hailo is far higher - `yolov8m` ran at 76 FPS on the
+AI HAT+ 2 - but that needs the HEF compile.
 
 ### The four classes
 
@@ -408,7 +517,7 @@ carried-item classes. Everything else COCO knows is dropped before NMS.
 ## F · Measured performance
 
 x86 dev machine **pinned to 4 physical cores** (the Pi 5's core count), on
-`media/vtest.avi` — a pedestrian scene with motion in 98% of frames, the
+`media/vtest.avi` - a pedestrian scene with motion in 98% of frames, the
 worst case for a motion-gated pipeline. 300 frames per run, same gating as
 the live pipeline. Accuracy is agreement with PyTorch at 640 on the same
 frames (IoU ≥ 0.5, same class).
@@ -425,7 +534,7 @@ frames (IoU ≥ 0.5, same class).
 
 How to read it:
 
-- **Face recognition was the dominant cost** — about a second per frame
+- **Face recognition was the dominant cost** - about a second per frame
   when a person was present, and its thread pool starved YOLO (40 → 117 ms).
 - **Motion downscaling matters at camera resolution, not at 768 px.** At
   native video size motion was already 3 ms; at 1080p it was 30% of the frame.
@@ -434,7 +543,7 @@ How to read it:
 - **NCNN is an ARM runtime.** It loses to PyTorch on x86, which says nothing
   about the Pi. Measure it there before choosing.
 - **Exported models have a fixed input size.** An OpenVINO export built at 640
-  and asked for 416 returned zero detections — which looked like 211 FPS. The
+  and asked for 416 returned zero detections - which looked like 211 FPS. The
   node now uses the export's own size and logs a warning. To change size,
   re-export: `python scripts/export_cpu_models.py --format ncnn --imgsz 416`.
 - **These are x86 numbers.** A Pi 5 core is several times slower. The
@@ -449,21 +558,23 @@ re-export NCNN at 416.
 
 ## Known gaps
 
-- **Hailo compile still pending.** ARGUS can't use the Hailo-10H until a
-  YOLO `.hef` is compiled for it (x86 Linux + Hailo Dataflow Compiler,
-  `scripts/export_hailo.py --hw-arch hailo10h`). The Hailo *hardware* is
-  verified: 76 FPS on `yolov8m_h10.hef` with `hailortcli benchmark`.
-  This is **not** blocked on hardware we do not have: the dev laptop is
-  x86_64, so `wsl --install -d Ubuntu-22.04` gives the DFC the Linux host
-  it needs. What is still missing is the DFC itself, which is a manual
-  download behind a free developer.hailo.ai account, and confirmation
-  that the installed DFC version supports `hailo10h`.
-- **No vehicle or animal samples.** Balanced accuracy cannot pass 0.75
-  while two of the five classes are empty. Fill them from footage rather
+- **Hailo compile: future work.** The base detector is locked to YOLOv8n on
+  CPU (2026-10-18). ARGUS can't use the Hailo-10H until a `.hef` is
+  compiled with the Hailo Dataflow Compiler (x86 Linux, a manual download
+  behind a free developer.hailo.ai account, `scripts/export_hailo.py
+  --hw-arch hailo10h`), and it was never installed. The Hailo *hardware* is
+  verified: 76 FPS on `yolov8m_h10.hef` with `hailortcli benchmark`. Hailo's
+  prebuilt `yolov8n_v5.x.hef` files sit in `models/hailo10h/` but are not
+  wired in (the loader expects an Ultralytics export directory).
+- **One physical node.** The federation demo is one real node plus
+  simulated MEVA peers (section H). Node B's parts have not arrived.
+- **No vehicle or animal samples on the Pi.** (MEVA supplies vehicles for
+  the simulated peers, never animals.) Balanced accuracy on the Pi's own
+  events cannot pass 0.75 while two of the five classes are empty. Fill them from footage rather
   than by hand: `scripts/ingest_video.py street.mp4 --label-by-class`
   labels each event from the class the detector assigned it, which is
   what mixed footage needs. Review the result in the dashboard before
-  training — it only ever writes `routine_*`, never `anomaly`.
+  training - it only ever writes `routine_*`, never `anomaly`.
 - **Threat model on CPU is expensive.** Keep `THREAT_ENABLED=false` until it
   is compiled for the accelerator.
 - **Dashboard auth mismatch.** The dashboard never sends its token to the
