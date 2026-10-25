@@ -260,6 +260,27 @@ def create_app() -> FastAPI:
             )
             app.state.detection_worker.start()
 
+        # Thermal monitor. Samples the SoC temperature, throttle flags and
+        # fan next to the detection rate, so an enclosure soak test is a
+        # record rather than a spot check. Harmless off a Pi: every reading
+        # is None.
+        app.state.thermal_monitor = None
+        if settings.THERMAL_ENABLED:
+            from src.system.thermal import ThermalMonitor
+
+            def _detect_fps():
+                worker = getattr(app.state, "detection_worker", None)
+                return worker.detect_rate.value() if worker is not None and worker.running else None
+
+            app.state.thermal_monitor = ThermalMonitor(
+                node=settings.NODE_NAME,
+                enclosure=settings.THERMAL_ENCLOSURE,
+                interval_s=settings.THERMAL_SAMPLE_S,
+                log_dir=settings.DATA_DIR / "thermal",
+                fps_source=_detect_fps,
+            )
+            app.state.thermal_monitor.start()
+
         # The federated cron. It runs exactly the round the manual trigger
         # runs: train the head on this node's labelled events in a separate
         # process, then gate the averaged model before it goes live.
@@ -287,6 +308,9 @@ def create_app() -> FastAPI:
         worker = getattr(app.state, "detection_worker", None)
         if worker is not None:
             worker.stop()
+        thermal = getattr(app.state, "thermal_monitor", None)
+        if thermal is not None:
+            thermal.stop()
         collector = getattr(app.state, "fl_collector", None)
         if collector is not None:
             collector.flush()

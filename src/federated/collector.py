@@ -224,7 +224,9 @@ class EventCollector:
             ok, buf = cv2.imencode(
                 ".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), int(self.snapshot_quality)])
             if ok:
-                self._snaps[tid] = (area, buf.tobytes())
+                # The box travels with the still, so the photo can carry its
+                # overlay later without re-running the detector.
+                self._snaps[tid] = (area, buf.tobytes(), tuple(float(v) for v in box))
         except Exception as exc:
             logger.warning("collector: snapshot encode failed: %s", exc)
 
@@ -242,8 +244,8 @@ class EventCollector:
                                [int(cv2.IMWRITE_JPEG_QUALITY), int(self.snapshot_quality)])
         return buf.tobytes() if ok else None
 
-    def _write_snapshot(self, tid: int) -> Tuple[Optional[str], Optional[str]]:
-        """Write the still and the crop. Returns both filenames.
+    def _write_snapshot(self, tid: int) -> Tuple[Optional[str], Optional[str], Optional[list]]:
+        """Write the still and the crop. Returns both filenames and the box.
 
         The crop's name is returned rather than inferred from the still's:
         anything reading the store later should not have to know the
@@ -252,7 +254,7 @@ class EventCollector:
         best = self._snaps.pop(tid, None)
         if best is None or self.snapshot_dir is None:
             self._crops.pop(tid, None)
-            return None, None
+            return None, None, None
         try:
             self.snapshot_dir.mkdir(parents=True, exist_ok=True)
             stem = uuid.uuid4().hex
@@ -266,10 +268,13 @@ class EventCollector:
                 crop_name = f"{stem}_crop.jpg"
                 (self.snapshot_dir / crop_name).write_bytes(crop)
                 self.crops_saved += 1
-            return name, crop_name
+            # Normalised xyxy of the subject in the still at the moment it
+            # was taken (the still is resized, the fractions are not).
+            box = [round(v, 4) for v in best[2]] if len(best) > 2 else None
+            return name, crop_name, box
         except Exception as exc:
             logger.warning("collector: snapshot write failed: %s", exc)
-            return None, None
+            return None, None, None
 
     def _close_motion(self) -> None:
         seg, self._motion = self._motion, None
@@ -316,9 +321,11 @@ class EventCollector:
             return False
 
         x = extract(t)
-        snapshot, crop = self._write_snapshot(tid)
+        snapshot, crop, box = self._write_snapshot(tid)
         meta = {
             "snapshot": snapshot,
+            # Where the subject is in the still, for the photo's overlay.
+            "box": box,
             # The subject on its own. Kept so an image model can be trained
             # later without recapturing any of this.
             "crop": crop,

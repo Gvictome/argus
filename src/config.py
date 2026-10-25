@@ -125,6 +125,13 @@ class Settings:
     # Hard stop, so a stuck trigger cannot record until the disk fills.
     RECORD_MAX_CLIP_S: float = 120.0
 
+    # Thermal monitor: SoC temperature, throttle flags and fan, sampled next
+    # to the detection rate and logged per day to data/thermal/ for the
+    # enclosure soak tests. THERMAL_ENCLOSURE labels every row.
+    THERMAL_ENABLED: bool = True
+    THERMAL_SAMPLE_S: float = 30.0
+    THERMAL_ENCLOSURE: str = ""
+
     # Storage
     DATA_DIR: Path = DATA_DIR
     MEDIA_DIR: Path = MEDIA_DIR
@@ -247,6 +254,10 @@ class Settings:
             RECORD_PRE_ROLL_S=float(os.getenv("RECORD_PRE_ROLL_S", 5.0)),
             RECORD_POST_ROLL_S=float(os.getenv("RECORD_POST_ROLL_S", 10.0)),
             RECORD_MAX_CLIP_S=float(os.getenv("RECORD_MAX_CLIP_S", 120.0)),
+            # Thermal monitor
+            THERMAL_ENABLED=os.getenv("THERMAL_ENABLED", "true").lower() == "true",
+            THERMAL_SAMPLE_S=float(os.getenv("THERMAL_SAMPLE_S", 30.0)),
+            THERMAL_ENCLOSURE=os.getenv("THERMAL_ENCLOSURE", ""),
         )
 
 

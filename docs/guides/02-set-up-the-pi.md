@@ -47,7 +47,22 @@ cd ~/argus
 python3 -m venv --system-site-packages .venv
 source .venv/bin/activate
 pip install --upgrade pip
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 pip install -r requirements.txt
+```
+
+**Install the CPU PyTorch first.** `requirements.txt` does not pin torch,
+and the default ARM build pulls in gigabytes of NVIDIA CUDA packages
+(`nvidia-cudnn-cu13`, `cuda-toolkit`, `triton`) that the Pi cannot use.
+If you see `nvidia-` packages downloading, stop, delete `.venv` and start
+this step again.
+
+**Over SSH, run the install in the background** so a dropped connection
+does not kill it halfway:
+
+```bash
+cd ~/argus && nohup sh -c '.venv/bin/pip install --upgrade pip && .venv/bin/pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu && .venv/bin/pip install -r requirements.txt; echo INSTALL-FINISHED' > ~/install.log 2>&1 &
+tail -f ~/install.log
 ```
 
 `--system-site-packages` is not optional — without it the environment cannot

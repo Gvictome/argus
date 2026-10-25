@@ -2,13 +2,16 @@
 API Routes for THE EYE
 """
 
+import logging
 from datetime import datetime
 from pathlib import Path
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 from typing import Optional, List
 
 from src.api.auth import optional_auth, require_auth
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -402,6 +405,42 @@ async def detection_status(request: Request):
     return status
 
 
+# ============================================================================
+# System health
+# ============================================================================
+
+def _thermal(request: Request):
+    monitor = getattr(request.app.state, "thermal_monitor", None)
+    if monitor is None:
+        raise HTTPException(status_code=503, detail="Thermal monitor is off (THERMAL_ENABLED=false)")
+    return monitor
+
+
+@router.get("/api/system/thermal", tags=["System"])
+async def thermal_status(request: Request):
+    """Current SoC temperature, throttle flags, fan and a 2 h summary."""
+    return _thermal(request).status()
+
+
+@router.get("/api/system/thermal/history", tags=["System"])
+async def thermal_history(request: Request, minutes: float = 120.0):
+    """Samples from the last `minutes` (up to 24 h), oldest first."""
+    monitor = _thermal(request)
+    minutes = max(1.0, min(minutes, 24 * 60.0))
+    return {"interval_s": monitor.interval_s, "summary": monitor.summary(minutes),
+            "samples": monitor.history(minutes)}
+
+
+@router.get("/api/system/thermal.csv", tags=["System"])
+async def thermal_csv(request: Request, minutes: float = 120.0):
+    """The same window as CSV, for soak-test records and the poster."""
+    monitor = _thermal(request)
+    minutes = max(1.0, min(minutes, 24 * 60.0))
+    name = f"thermal-{monitor.node.replace(' ', '-').lower()}-{int(minutes)}min.csv"
+    return Response(content=monitor.csv_text(minutes), media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
 @router.get("/api/faces", tags=["Detection"], dependencies=_PROTECTED)
 async def list_faces():
     """List all known faces"""
@@ -558,11 +597,13 @@ async def get_event(event_id: int, request: Request):
 
 
 @router.get("/api/events/{event_id}/snapshot", tags=["Events"], dependencies=_PROTECTED)
-async def event_snapshot(event_id: int, request: Request):
-    """The still saved for this event.
+async def event_snapshot(event_id: int, request: Request, overlay: bool = True):
+    """The still saved for this event, with the subject boxed and labelled.
 
     Resolved through the event's own record rather than from a filename in
-    the URL, so no request can reach outside the snapshot directory.
+    the URL, so no request can reach outside the snapshot directory. The
+    box is drawn here, not into the file, which stays clean training data;
+    ?overlay=0 returns it untouched.
     """
     from fastapi.responses import FileResponse
 
@@ -580,6 +621,19 @@ async def event_snapshot(event_id: int, request: Request):
     path = (Path(base) / name).resolve()
     if not str(path).startswith(str(Path(base).resolve())) or not path.exists():
         raise HTTPException(status_code=404, detail="Snapshot missing")
+
+    if overlay:
+        from src.api.dashboard_routes import _event_from_row
+        from src.detection.snapshot_overlay import draw_overlay, event_box
+        try:
+            box = event_box(row.get("meta") or {}, Path(base))
+            if box is not None:
+                ev = _event_from_row(row, getattr(request.app.state, "fl_head", None))
+                label = f"{ev['label']} {ev['confidence']}%"
+                return Response(content=draw_overlay(path.read_bytes(), box, label, ev["status"] == "stranger"),
+                                media_type="image/jpeg")
+        except Exception as exc:  # a bad overlay must never cost the photo itself
+            logger.warning("snapshot overlay failed for event %s: %s", event_id, exc)
     return FileResponse(path, media_type="image/jpeg")
 
 
