@@ -77,6 +77,36 @@ class TestSummary:
         assert len(m.samples) == 2
 
 
+class TestSysfsFallback:
+    def _m(self, tmp_path, temp, mhz, word):
+        return ThermalMonitor(
+            node="Node A", enclosure="x", interval_s=30, log_dir=tmp_path,
+            readers={"temp": lambda: temp, "mhz": lambda: mhz, "fan": lambda: None,
+                     "throttle": lambda: None, "throttle_fallback": lambda t, m: word},
+        )
+
+    def test_used_when_vcgencmd_cannot_run(self, tmp_path):
+        m = self._m(tmp_path, 82.0, 1800, 0b1010)
+        s = m.sample()
+        assert s.throttled_now == ["freq_capped", "soft_temp_limit"]
+        st = m.status()["throttled"]
+        assert st["source"] == "sysfs" and st["since_boot"] == ["freq_capped", "soft_temp_limit"]
+
+    def test_since_boot_is_kept_after_it_clears(self, tmp_path):
+        words = iter([0b1, 0])
+        m = ThermalMonitor(node="n", enclosure="e", log_dir=tmp_path, readers={
+            "temp": lambda: 60.0, "mhz": lambda: 2400, "fan": lambda: None,
+            "throttle": lambda: None, "throttle_fallback": lambda t, mh: next(words)})
+        m.sample(); m.sample()
+        st = m.status()["throttled"]
+        assert st["now"] == [] and st["since_boot"] == ["under_voltage"]
+
+    def test_no_source_at_all(self, tmp_path):
+        m = self._m(tmp_path, None, None, None)
+        m.sample()
+        assert m.status()["throttled"]["source"] == "none"
+
+
 class TestCsvLog:
     def test_one_file_per_day_with_enclosure(self, tmp_path):
         m = _monitor(tmp_path, [57.0, 58.0])

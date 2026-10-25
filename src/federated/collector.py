@@ -29,7 +29,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-from src.federated.features import Track, class_index, extract, describe
+from src.federated.features import CLASS_NAMES, Track, class_index, extract, describe
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +56,10 @@ class EventCollector:
                  source: str = "camera", reach_factor: float = 2.5,
                  motion_min_area: float = 0.002, motion_min_s: float = 1.0,
                  motion_max_s: float = 60.0, snapshot_dir=None,
-                 snapshot_width: int = 640, snapshot_quality: int = 70):
+                 snapshot_width: int = 640, snapshot_quality: int = 70,
+                 stationary_classes: Sequence[str] = ("vehicle", "package"),
+                 stationary_iou: float = 0.8, stationary_keep_s: float = 3600.0,
+                 stationary_forget_s: float = 1800.0):
         self.store = store
         self.db = db
         self.iou_threshold = iou_threshold
@@ -91,6 +94,21 @@ class EventCollector:
         self._crops: Dict[int, Optional[bytes]] = {}
         self.snapshots_saved = 0
         self.crops_saved = 0
+        # Parked objects. A parked car is re-detected every time something
+        # else in the scene (palm fronds, light) opens the motion gate, and
+        # each time it was a new event with a new photo: 1,754 of one night's
+        # 2,140 events on Node A were the same few cars. A track that did not
+        # move and sits where a known object already sits is suppressed;
+        # one event per object per stationary_keep_s is kept, marked
+        # stationary, so the object is still on record.
+        self.stationary_classes = {CLASS_NAMES.index(c) for c in stationary_classes
+                                   if c in CLASS_NAMES}
+        self.stationary_iou = stationary_iou
+        self.stationary_keep_s = stationary_keep_s
+        self.stationary_forget_s = stationary_forget_s
+        self._first_box: Dict[int, Tuple[float, float, float, float]] = {}
+        self._parked: List[dict] = []
+        self.suppressed_stationary = 0
 
     # ------------------------------------------------------------------
     def observe(self, detections: Sequence, frame_shape: Tuple[int, int],
@@ -156,6 +174,7 @@ class EventCollector:
                 )
 
             used.add(best_id)
+            self._first_box.setdefault(best_id, box)
             self._tracks[best_id].update(box, float(det.confidence), now)
             self._boxes[best_id] = box
             touched.append(best_id)
@@ -304,9 +323,30 @@ class EventCollector:
             if now - t.last_seen > self.max_idle_s:
                 self._emit(tid)
 
+    def _stationary(self, t: Track, first, last) -> Optional[bool]:
+        """None = not a stationary-class track that sat still. Otherwise
+        True if it should be suppressed, False if kept as the record."""
+        if t.cls not in self.stationary_classes or first is None or last is None:
+            return None
+        if _iou(first, last) < self.stationary_iou:
+            return None  # it moved during the track: arriving, leaving
+        now = t.last_seen
+        self._parked = [p for p in self._parked if now - p["last_seen"] <= self.stationary_forget_s]
+        for p in self._parked:
+            if p["cls"] == t.cls and _iou(p["box"], last) >= self.stationary_iou:
+                p["last_seen"] = now
+                p["box"] = last
+                if now - p["last_kept"] < self.stationary_keep_s:
+                    return True
+                p["last_kept"] = now
+                return False
+        self._parked.append({"cls": t.cls, "box": last, "last_seen": now, "last_kept": now})
+        return False
+
     def _emit(self, tid: int) -> bool:
         t = self._tracks.pop(tid, None)
-        self._boxes.pop(tid, None)
+        last_box = self._boxes.pop(tid, None)
+        first_box = self._first_box.pop(tid, None)
         if t is None:
             self._snaps.pop(tid, None)
             self._crops.pop(tid, None)
@@ -316,6 +356,13 @@ class EventCollector:
         # would fill the store with noise the operator then has to label.
         if t.frames < self.min_frames:
             self.dropped_short += 1
+            self._snaps.pop(tid, None)
+            self._crops.pop(tid, None)
+            return False
+
+        stationary = self._stationary(t, first_box, last_box)
+        if stationary:
+            self.suppressed_stationary += 1
             self._snaps.pop(tid, None)
             self._crops.pop(tid, None)
             return False
@@ -334,6 +381,8 @@ class EventCollector:
             "duration_s": round(t.last_seen - t.first_seen, 3),
             "source": self.source,
             "synthetic": False,
+            # Kept as the record of an object that is not going anywhere.
+            "stationary": stationary is False,
         }
         try:
             sid = self.store.append(x, label=None, meta=meta)
@@ -372,6 +421,8 @@ class EventCollector:
             "motion_events": self.motion_events,
             "snapshots_saved": self.snapshots_saved,
             "crops_saved": self.crops_saved,
+            "suppressed_stationary": self.suppressed_stationary,
+            "parked_objects": len(self._parked),
             "motion_open": self._motion is not None,
             "reach_factor": self.reach_factor,
             "max_idle_s": self.max_idle_s,

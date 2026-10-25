@@ -128,6 +128,12 @@ class Settings:
     # Thermal monitor: SoC temperature, throttle flags and fan, sampled next
     # to the detection rate and logged per day to data/thermal/ for the
     # enclosure soak tests. THERMAL_ENCLOSURE labels every row.
+    # Parked objects: a vehicle or package that did not move and sits where
+    # one already sits is not a new event (one record per hour is kept).
+    STATIONARY_SUPPRESS: bool = True
+    STATIONARY_CLASSES: str = "vehicle,package"
+    STATIONARY_KEEP_S: float = 3600.0
+
     THERMAL_ENABLED: bool = True
     THERMAL_SAMPLE_S: float = 30.0
     THERMAL_ENCLOSURE: str = ""
@@ -254,6 +260,9 @@ class Settings:
             RECORD_PRE_ROLL_S=float(os.getenv("RECORD_PRE_ROLL_S", 5.0)),
             RECORD_POST_ROLL_S=float(os.getenv("RECORD_POST_ROLL_S", 10.0)),
             RECORD_MAX_CLIP_S=float(os.getenv("RECORD_MAX_CLIP_S", 120.0)),
+            STATIONARY_SUPPRESS=os.getenv("STATIONARY_SUPPRESS", "true").lower() == "true",
+            STATIONARY_CLASSES=os.getenv("STATIONARY_CLASSES", "vehicle,package"),
+            STATIONARY_KEEP_S=float(os.getenv("STATIONARY_KEEP_S", 3600.0)),
             # Thermal monitor
             THERMAL_ENABLED=os.getenv("THERMAL_ENABLED", "true").lower() == "true",
             THERMAL_SAMPLE_S=float(os.getenv("THERMAL_SAMPLE_S", 30.0)),

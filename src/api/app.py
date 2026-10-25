@@ -226,6 +226,10 @@ def create_app() -> FastAPI:
             app.state.fl_collector = EventCollector(
                 store=app.state.fl_store, db=db,
                 snapshot_dir=Path(settings.DATA_DIR) / "snapshots",
+                stationary_classes=(
+                    [c.strip() for c in settings.STATIONARY_CLASSES.split(",") if c.strip()]
+                    if settings.STATIONARY_SUPPRESS else ()),
+                stationary_keep_s=settings.STATIONARY_KEEP_S,
             )
             detection_service.attach_collector(app.state.fl_collector)
             logger.info(

@@ -34,6 +34,8 @@ logger = logging.getLogger(__name__)
 
 SOC_TEMP_PATH = "/sys/class/thermal/thermal_zone0/temp"
 CPU_FREQ_PATH = "/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq"
+CPU_MAX_FREQ_PATH = "/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq"
+HWMON_GLOB = "/sys/class/hwmon/hwmon*"
 FAN_GLOB = "/sys/devices/platform/cooling_fan/hwmon/hwmon*/fan1_input"
 
 # Pi 5 limits, for the dashboard and the soak pass/fail.
@@ -81,13 +83,46 @@ def read_fan_rpm() -> Optional[int]:
 
 
 def read_throttled_raw() -> Optional[int]:
-    """The firmware's throttle word, or None when vcgencmd is not there."""
+    """The firmware's throttle word, or None when vcgencmd cannot reach it.
+
+    vcgencmd needs /dev/vcio, which some Pi 5 images do not create
+    ("Can't open device file: /dev/vcio"), even for the video group.
+    """
     try:
         out = subprocess.run(["vcgencmd", "get_throttled"], capture_output=True,
                              text=True, timeout=2).stdout
         return int(out.strip().split("=")[1], 16)
     except (OSError, IndexError, ValueError, subprocess.SubprocessError):
         return None
+
+
+def read_under_voltage() -> Optional[bool]:
+    """The rpi_volt hwmon alarm: the supply dipped below what the Pi needs."""
+    for hw in glob.glob(HWMON_GLOB):
+        try:
+            if Path(hw, "name").read_text().strip() == "rpi_volt":
+                return Path(hw, "in0_lcrit_alarm").read_text().strip() == "1"
+        except OSError:
+            continue
+    return None
+
+
+def sysfs_throttle_word(temp_c: Optional[float], cur_mhz: Optional[int]) -> Optional[int]:
+    """A throttle word built from what the kernel exposes, for when vcgencmd
+    cannot run. Under-voltage comes from the rpi_volt alarm; a capped clock
+    is inferred from the chip being at the soft limit while the clock sits
+    below its maximum (idle clocks drop too, but not at 80 C)."""
+    uv = read_under_voltage()
+    max_khz = _read_number(CPU_MAX_FREQ_PATH)
+    if uv is None and max_khz is None:
+        return None
+    word = 0
+    if uv:
+        word |= 1 << 0
+    if (temp_c is not None and cur_mhz is not None and max_khz is not None
+            and temp_c >= SOFT_LIMIT_C and cur_mhz < int(max_khz / 1000)):
+        word |= (1 << 1) | (1 << 3)  # freq_capped, soft_temp_limit
+    return word
 
 
 def decode_throttled(raw: Optional[int]) -> Dict[str, object]:
@@ -135,6 +170,9 @@ class ThermalMonitor:
         self._mhz = r.get("mhz", read_cpu_mhz)
         self._fan = r.get("fan", read_fan_rpm)
         self._throttle = r.get("throttle", read_throttled_raw)
+        self._throttle_fallback = r.get("throttle_fallback", sysfs_throttle_word)
+        self.throttle_source = "none"
+        self._seen_now = 0  # "now" bits seen by this process, for the sysfs path
         self.samples: Deque[ThermalSample] = deque(
             maxlen=max(1, int(history_hours * 3600 / self.interval_s)))
         self.started = time.time()
@@ -146,7 +184,19 @@ class ThermalMonitor:
     # ---- sampling -------------------------------------------------------
 
     def sample(self) -> ThermalSample:
+        temp, mhz = self._temp(), self._mhz()
         raw = self._throttle()
+        if raw is not None:
+            self.throttle_source = "vcgencmd"
+        else:
+            raw = self._throttle_fallback(temp, mhz)
+            if raw is not None:
+                # sysfs has no "since boot" half; keep it for this process.
+                self._seen_now |= raw & 0xF
+                raw |= self._seen_now << 16
+                self.throttle_source = "sysfs"
+            else:
+                self.throttle_source = "none"
         self._last_raw = raw
         fps = None
         if self.fps_source is not None:
@@ -156,8 +206,8 @@ class ThermalMonitor:
                 fps = None
         s = ThermalSample(
             ts=time.time(),
-            soc_temp_c=self._temp(),
-            cpu_mhz=self._mhz(),
+            soc_temp_c=temp,
+            cpu_mhz=mhz,
             fan_rpm=self._fan(),
             throttled_hex=decode_throttled(raw)["hex"],
             throttled_now=decode_throttled(raw)["now"],
@@ -239,7 +289,7 @@ class ThermalMonitor:
             "running_since": datetime.fromtimestamp(self.started).isoformat(timespec="seconds"),
             "limits_c": {"soft": SOFT_LIMIT_C, "hard": HARD_LIMIT_C},
             "current": asdict(last) if last else None,
-            "throttled": decode_throttled(self._last_raw),
+            "throttled": {**decode_throttled(self._last_raw), "source": self.throttle_source},
             "summary": self.summary(),
         }
 
