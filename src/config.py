@@ -124,6 +124,15 @@ class Settings:
     RECORD_POST_ROLL_S: float = 10.0
     # Hard stop, so a stuck trigger cannot record until the disk fills.
     RECORD_MAX_CLIP_S: float = 120.0
+    # Keep only clips that overlap a priority-1 (anomaly) event; delete the
+    # rest RECORD_GRACE_S after they close. False keeps every clip, which is
+    # how Node A's card filled with 18 GB of footage.
+    RECORD_P1_ONLY: bool = True
+    RECORD_GRACE_S: float = 30.0
+    # Kept clips are capped at this size, oldest deleted first.
+    RECORD_MAX_GB: float = 4.0
+    # No new clip starts while the disk has less free than this.
+    RECORD_MIN_FREE_GB: float = 3.0
 
     # Thermal monitor: SoC temperature, throttle flags and fan, sampled next
     # to the detection rate and logged per day to data/thermal/ for the
@@ -260,6 +269,10 @@ class Settings:
             RECORD_PRE_ROLL_S=float(os.getenv("RECORD_PRE_ROLL_S", 5.0)),
             RECORD_POST_ROLL_S=float(os.getenv("RECORD_POST_ROLL_S", 10.0)),
             RECORD_MAX_CLIP_S=float(os.getenv("RECORD_MAX_CLIP_S", 120.0)),
+            RECORD_P1_ONLY=os.getenv("RECORD_P1_ONLY", "true").lower() == "true",
+            RECORD_GRACE_S=float(os.getenv("RECORD_GRACE_S", 30.0)),
+            RECORD_MAX_GB=float(os.getenv("RECORD_MAX_GB", 4.0)),
+            RECORD_MIN_FREE_GB=float(os.getenv("RECORD_MIN_FREE_GB", 3.0)),
             STATIONARY_SUPPRESS=os.getenv("STATIONARY_SUPPRESS", "true").lower() == "true",
             STATIONARY_CLASSES=os.getenv("STATIONARY_CLASSES", "vehicle,package"),
             STATIONARY_KEEP_S=float(os.getenv("STATIONARY_KEEP_S", 3600.0)),

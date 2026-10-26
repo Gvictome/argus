@@ -176,6 +176,7 @@ def create_app() -> FastAPI:
         if settings.RECORD_EVENTS:
             try:
                 from src.detection.event_recorder import EventRecorder, RecorderConfig
+                from src.detection import DetectionType
                 def _log_clip(record, _db=db):
                     """Put every finished clip in the events table."""
                     import json as _json
@@ -191,15 +192,27 @@ def create_app() -> FastAPI:
                         )
                     except Exception as exc:
                         logger.warning("Could not log clip: %s", exc)
+                    # The keeper is built after the sample store, below.
+                    keeper = getattr(app.state, "clip_keeper", None)
+                    if keeper is not None:
+                        keeper.on_clip(record)
 
+                def _can_record():
+                    keeper = getattr(app.state, "clip_keeper", None)
+                    return keeper.can_record() if keeper is not None else True
+
+                config = RecorderConfig(
+                    pre_roll_s=settings.RECORD_PRE_ROLL_S,
+                    post_roll_s=settings.RECORD_POST_ROLL_S,
+                    max_clip_s=settings.RECORD_MAX_CLIP_S,
+                )
+                if settings.RECORD_P1_ONLY:
+                    # An anomaly can be any class, and clips nothing claims
+                    # are deleted anyway, so animals record too.
+                    config.triggers.add(DetectionType.ANIMAL)
                 app.state.event_recorder = EventRecorder(
-                    RecorderConfig(
-                        pre_roll_s=settings.RECORD_PRE_ROLL_S,
-                        post_roll_s=settings.RECORD_POST_ROLL_S,
-                        max_clip_s=settings.RECORD_MAX_CLIP_S,
-                    ),
-                    camera_name="primary",
-                    on_clip=_log_clip,
+                    config, camera_name="primary",
+                    on_clip=_log_clip, can_record=_can_record,
                 )
                 logger.info(
                     "Event recording on — %.0fs pre-roll, %.0fs post-roll",
@@ -243,6 +256,23 @@ def create_app() -> FastAPI:
             app.state.fl_head = None
             app.state.fl_store = None
             app.state.fl_collector = None
+
+        # Clip keeper: keeps footage only around priority-1 events and holds
+        # the clip folder under RECORD_MAX_GB.
+        app.state.clip_keeper = None
+        if (app.state.event_recorder is not None and settings.RECORD_P1_ONLY
+                and getattr(app.state, "fl_store", None) is not None):
+            from src.detection.clip_keeper import ClipKeeper
+            app.state.clip_keeper = ClipKeeper(
+                clip_dir=Path(settings.MEDIA_DIR) / "events",
+                store=app.state.fl_store,
+                head_source=lambda: getattr(app.state, "fl_head", None),
+                max_bytes=int(settings.RECORD_MAX_GB * 1e9),
+                min_free_bytes=int(settings.RECORD_MIN_FREE_GB * 1e9),
+                grace_s=settings.RECORD_GRACE_S,
+            )
+            app.state.clip_keeper.start()
+            logger.info("Clip keeper on: P1 clips only, cap %.1f GB", settings.RECORD_MAX_GB)
 
         # Restore the last accepted federated model, so an update survives a
         # restart instead of reverting to random weights.
@@ -327,6 +357,9 @@ def create_app() -> FastAPI:
         recorder = getattr(app.state, "event_recorder", None)
         if recorder is not None:
             recorder.close()
+        keeper = getattr(app.state, "clip_keeper", None)
+        if keeper is not None:
+            keeper.stop()
 
         # Release every camera. A CSI sensor left open blocks the next
         # process from acquiring it, which turns one crash into a reboot.

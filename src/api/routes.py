@@ -593,7 +593,25 @@ async def get_event(event_id: int, request: Request):
     row = store.by_n(event_id) if store is not None else None
     if row is None:
         raise HTTPException(status_code=404, detail=f"Event {event_id} not found")
-    return _event_from_row(row, getattr(request.app.state, "fl_head", None))
+    return _event_from_row(row, getattr(request.app.state, "fl_head", None),
+                           getattr(request.app.state, "clip_keeper", None))
+
+
+@router.get("/api/events/{event_id}/clip", tags=["Events"], dependencies=_PROTECTED)
+async def event_clip(event_id: int, request: Request):
+    """The H.264 clip kept for a priority-1 event.
+
+    Looked up through the clip index by event id, never a filename from
+    the URL. FileResponse answers Range requests, which is what lets the
+    browser's <video> seek.
+    """
+    from fastapi.responses import FileResponse
+
+    keeper = getattr(request.app.state, "clip_keeper", None)
+    path = keeper.clip_for(event_id) if keeper is not None else None
+    if path is None:
+        raise HTTPException(status_code=404, detail="No clip for this event")
+    return FileResponse(path, media_type="video/mp4")
 
 
 @router.get("/api/events/{event_id}/snapshot", tags=["Events"], dependencies=_PROTECTED)
@@ -641,10 +659,12 @@ async def event_snapshot(event_id: int, request: Request, overlay: bool = True):
 async def list_clips(request: Request, limit: int = 20):
     """Recorded clips, newest first."""
     recorder = getattr(request.app.state, "event_recorder", None)
+    keeper = getattr(request.app.state, "clip_keeper", None)
     if recorder is None:
         return {"recording": False, "clips": []}
     return {"recording": recorder.is_recording,
-            "clips": recorder.recent_clips(limit)}
+            "clips": recorder.recent_clips(limit),
+            "keeper": keeper.status() if keeper is not None else None}
 
 
 # ============================================================================

@@ -84,7 +84,7 @@ def _iso(ts: float) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _event_from_row(row: dict, head) -> dict:
+def _event_from_row(row: dict, head, keeper=None) -> dict:
     """Render one stored sample as a dashboard DetectionEvent."""
     x = np.array(row["x"], dtype=np.float32)
     cls_idx = int(np.argmax(x[:4])) if x[:4].any() else 0
@@ -122,7 +122,20 @@ def _event_from_row(row: dict, head) -> dict:
         # dashboard; the built-in page uses it to show the still.
         "snapshot": (f"/api/events/{int(row.get('n') or 0)}/snapshot"
                      if (row.get("meta") or {}).get("snapshot") else None),
+        # 1 = anomaly (see src/detection/clip_keeper.py), frozen once decided;
+        # None = unranked. clip is set only when footage was kept for it.
+        "priority": _priority(row, head, keeper),
+        "clip": (f"/api/events/{int(row.get('n') or 0)}/clip"
+                 if keeper is not None and keeper.clip_for(int(row.get("n") or 0))
+                 else None),
     }
+
+
+def _priority(row: dict, head, keeper) -> Optional[int]:
+    if keeper is not None:
+        return keeper.priority(row, head)
+    from src.detection.clip_keeper import priority_of
+    return priority_of(row, head)
 
 
 # ============================================================================
@@ -210,7 +223,8 @@ def build_events(request: Request, limit: int = 50) -> List[dict]:
     if store is None:
         return []
     rows = [r for r in store._rows if not r.get("meta", {}).get("synthetic")]
-    out = [_event_from_row(r, head) for r in rows[-limit:]]
+    keeper = getattr(request.app.state, "clip_keeper", None)
+    out = [_event_from_row(r, head, keeper) for r in rows[-limit:]]
     out.reverse()
     return out
 
@@ -324,7 +338,8 @@ async def events_socket(websocket: WebSocket):
             ]
             for r in fresh:
                 seen = max(seen, r.get("n") or 0)
-                await websocket.send_text(json.dumps(_event_from_row(r, head)))
+                await websocket.send_text(json.dumps(
+                    _event_from_row(r, head, getattr(app.state, "clip_keeper", None))))
             await asyncio.sleep(1.0)
     except WebSocketDisconnect:
         pass
