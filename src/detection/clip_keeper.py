@@ -197,13 +197,40 @@ class ClipKeeper:
                 "-preset", "veryfast", "-crf", "28", "-pix_fmt", "yuv420p",
                 "-threads", "1", "-movflags", "+faststart", "-an", str(out)]
         try:
-            subprocess.run(cmd, check=True, timeout=600)
+            subprocess.run(cmd, check=True, timeout=600, capture_output=True, text=True)
             path.unlink(missing_ok=True)
             return out
+        except subprocess.CalledProcessError as exc:
+            # ffmpeg's own message is the only useful part; keep its tail.
+            logger.warning("clips: transcode failed for %s: %s", path.name,
+                           (exc.stderr or "").strip()[-400:] or exc)
+            out.unlink(missing_ok=True)
+            return path
         except Exception as exc:
             logger.warning("clips: transcode failed for %s: %s", path.name, exc)
             out.unlink(missing_ok=True)
             return path
+
+    def reencode_kept(self) -> int:
+        """Convert kept clips that are still mp4v (a failed or skipped
+        transcode) to H.264, updating the index. Returns how many changed."""
+        changed = 0
+        for name in [n for n in self._index["clips"] if not n.endswith("_h264.mp4")]:
+            path = self.clip_dir / name
+            if not path.exists():
+                continue
+            out = self._transcode(path)
+            if out == path:
+                continue
+            info = self._index["clips"].pop(name)
+            info["bytes"] = out.stat().st_size
+            self._index["clips"][out.name] = info
+            for entry in self._index["events"].values():
+                if entry.get("clip") == name:
+                    entry["clip"] = out.name
+            changed += 1
+            logger.info("clips: re-encoded %s", out.name)
+        return changed
 
     def enforce_cap(self) -> None:
         """Delete the oldest kept clips until the folder is under max_bytes."""

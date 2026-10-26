@@ -71,9 +71,11 @@ def node_running() -> bool:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--apply", action="store_true", help="write the index and delete/re-encode clips")
+    ap.add_argument("--reencode", action="store_true",
+                    help="only convert already-kept mp4v clips to H.264 (needs ffmpeg)")
     args = ap.parse_args()
 
-    if args.apply and node_running():
+    if (args.apply or args.reencode) and node_running():
         print("argus-node is running; stop it first: sudo systemctl stop argus-node")
         return 1
 
@@ -91,8 +93,18 @@ def main() -> int:
         head_source=lambda: head,
         max_bytes=int(settings.RECORD_MAX_GB * 1e9),
         min_free_bytes=int(settings.RECORD_MIN_FREE_GB * 1e9),
-        transcode=args.apply,
+        transcode=args.apply or args.reencode,
     )
+
+    if args.reencode:
+        if keeper.ffmpeg is None:
+            print("ffmpeg not found: sudo apt install -y ffmpeg")
+            return 1
+        print(f"re-encoded {keeper.reencode_kept()} clip(s)")
+        keeper.enforce_cap()
+        keeper._save_index()
+        print(f"done: {keeper.status()}")
+        return 0
 
     rows = [r for r in store._rows if not (r.get("meta") or {}).get("synthetic")]
     p1 = [r for r in rows if priority_of(r, head) == P1]

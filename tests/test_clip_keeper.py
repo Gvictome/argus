@@ -132,3 +132,20 @@ class TestEndpoint:
         assert part.status_code == 206 and len(part.content) == 100
         assert missing.status_code == 404
         assert event["priority"] == P1 and event["clip"] == "/api/events/9/clip"
+
+
+def test_reencode_renames_clip_in_index(tmp_path, monkeypatch):
+    k = keeper(tmp_path, [row(4, 1010.0, y=ANOMALY)])
+    k.on_clip(clip(tmp_path, "raw.mp4", 1000.0, 1020.0))
+    k.sweep(now=T0 + 1100.0)
+
+    def fake_transcode(path):
+        out = path.with_name(path.stem + "_h264.mp4")
+        out.write_bytes(b"h264")
+        path.unlink()
+        return out
+    monkeypatch.setattr(k, "_transcode", fake_transcode)
+
+    assert k.reencode_kept() == 1
+    assert k.clip_for(4) == (tmp_path / "raw_h264.mp4").resolve()
+    assert k.reencode_kept() == 0
