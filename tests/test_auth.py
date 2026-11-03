@@ -169,3 +169,29 @@ class TestPasswordHashing:
         s = SecurityService(secret_key="k")
         assert s.hash_password("same") != s.hash_password("same")
         assert s.verify_password("same", s.hash_password("same"))
+
+    def test_verify_password_uses_constant_time_compare(self, monkeypatch):
+        """Gate B F9: the hash compare must not short-circuit on the first byte."""
+        import hmac
+
+        from src.security import SecurityService
+
+        calls = []
+        real = hmac.compare_digest
+
+        def spy(a, b):
+            calls.append((a, b))
+            return real(a, b)
+
+        monkeypatch.setattr(hmac, "compare_digest", spy)
+        s = SecurityService(secret_key="k")
+        hashed = s.hash_password("right")
+        assert s.verify_password("right", hashed) is True
+        assert s.verify_password("wrong", hashed) is False
+        assert len(calls) == 2
+
+    @pytest.mark.parametrize("hashed", ["", "nodollar", "a$b$c", "salt$éé"])
+    def test_verify_password_rejects_malformed_hashes(self, hashed):
+        from src.security import SecurityService
+
+        assert SecurityService(secret_key="k").verify_password("x", hashed) is False

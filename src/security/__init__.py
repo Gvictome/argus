@@ -9,6 +9,7 @@ Handles:
 """
 
 import hashlib
+import hmac
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -90,8 +91,11 @@ class SecurityService:
                 salt.encode(),
                 100000
             )
-            return hash_obj.hex() == stored_hash
-        except ValueError:
+            # Constant-time compare so timing does not leak the hash (Gate B F9).
+            return hmac.compare_digest(hash_obj.hex(), stored_hash)
+        except (ValueError, TypeError):
+            # ValueError: not "salt$hash". TypeError: non-ASCII stored hash,
+            # which compare_digest refuses for str; neither can match.
             return False
 
     # ========================================================================
