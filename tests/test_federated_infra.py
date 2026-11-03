@@ -16,6 +16,7 @@ from types import SimpleNamespace
 import pytest
 
 REPO = Path(__file__).resolve().parents[1]
+VIDEO = REPO / "media" / "vtest.avi"
 
 
 def _app(tmp_path, monkeypatch, labelled=0):
@@ -111,10 +112,13 @@ class TestVideoIngest:
         span = max(r["t"] for r in rows) - min(r["t"] for r in rows)
         assert span < 30, f"events span {span:.1f}s of clip time, expected a few"
 
+    # ingest_video.py checks the file exists before the label, so without
+    # the clip it exits on "no such video" and never reaches the label check.
+    @pytest.mark.skipif(not VIDEO.exists(), reason="test video not present")
     def test_an_unknown_label_is_rejected(self, tmp_path):
         result = subprocess.run(
             [sys.executable, str(REPO / "scripts" / "ingest_video.py"),
-             str(REPO / "media" / "vtest.avi"), "--label", "nonsense",
+             str(VIDEO), "--label", "nonsense",
              "--data-dir", str(tmp_path)],
             cwd=str(REPO), capture_output=True, text=True, timeout=120,
         )
