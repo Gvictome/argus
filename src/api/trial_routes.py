@@ -25,7 +25,7 @@ import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from src.api.auth import require_auth
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.config import settings
 from src.federated import model_state
@@ -89,9 +89,14 @@ async def label_sample(sample_id: str, body: LabelRequest, request: Request):
     return {"id": sample_id, "label": LABEL_NAMES[body.label], "stats": st.stats()}
 
 
+# Upper bound on synthetic rows per call: enough to train on, small enough
+# that one request cannot fill a node's SD card (Gate B F3).
+BOOTSTRAP_MAX_N = 20000
+
+
 class BootstrapRequest(BaseModel):
     site: str = "driveway"
-    n: int = 5000
+    n: int = Field(5000, ge=1, le=BOOTSTRAP_MAX_N)
     seed: int = 0
 
 
@@ -105,7 +110,11 @@ async def bootstrap_samples(body: BootstrapRequest, request: Request):
     """
     st = _store(request)
     try:
-        n = st.bootstrap(body.site, int(body.n), int(body.seed))
+        # Synchronous and slow (minutes at the default n on a Pi): run it in a
+        # worker thread so the stream and other routes keep serving.
+        n = await asyncio.to_thread(
+            st.bootstrap, body.site, int(body.n), int(body.seed)
+        )
     except KeyError as exc:
         # An unknown site is the caller's typo, not a server fault, and a
         # bare 500 does not say which sites exist.
