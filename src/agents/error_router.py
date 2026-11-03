@@ -179,7 +179,9 @@ class ErrorRouter:
 
         agent = self.agents[report.category]
 
-        if not report.auto_fixable and not auto_approve:
+        # Run something only when the agent marked the fix as safe AND the
+        # caller explicitly approved it. Never on analysis alone.
+        if not (report.auto_fixable and auto_approve):
             return FixResult(
                 success=False,
                 action_taken="none",
@@ -264,12 +266,18 @@ class BaseErrorAgent:
         """Execute the fix - override in subclass"""
         raise NotImplementedError
 
-    def run_command(self, command: str, shell: bool = True) -> Tuple[bool, str]:
-        """Run a shell command and return result"""
+    def run_command(self, args: List[str]) -> Tuple[bool, str]:
+        """Run a fixed argument list (never through a shell) and return the result.
+
+        Strings are refused: a string would need a shell to split it, and the
+        shell is how posted error text used to become a command.
+        """
+        if not isinstance(args, list) or not args or not all(isinstance(a, str) for a in args):
+            return False, "Refused: commands must be a non-empty list of strings"
         try:
             result = subprocess.run(
-                command,
-                shell=shell,
+                args,
+                shell=False,
                 capture_output=True,
                 text=True,
                 timeout=120

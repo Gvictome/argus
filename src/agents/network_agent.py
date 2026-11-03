@@ -53,8 +53,9 @@ class NetworkAgent(BaseErrorAgent):
 
     def can_auto_fix(self, report: ErrorReport) -> bool:
         """Check if this network error can be auto-fixed"""
-        # Port conflicts can be auto-fixed
-        return report.subcategory == "port_in_use"
+        # Never automatic: the port comes from posted text, and killing
+        # whatever holds it could take down sshd or the server itself.
+        return False
 
     def execute_fix(self, report: ErrorReport) -> FixResult:
         """Execute the network fix"""
@@ -68,7 +69,7 @@ class NetworkAgent(BaseErrorAgent):
         )
 
     def _fix_port_conflict(self, report: ErrorReport) -> FixResult:
-        """Fix a port-in-use error by killing the blocking process"""
+        """Report which process holds the port. Never kills anything."""
         port = self._extract_port(report.raw_message)
         if not port:
             return FixResult(
@@ -77,35 +78,16 @@ class NetworkAgent(BaseErrorAgent):
                 error="Could not extract port number from error"
             )
 
-        # Find the process using the port
         pid = self._find_process_on_port(port)
-        if not pid:
-            return FixResult(
-                success=False,
-                action_taken=f"Searched for process on port {port}",
-                error="Could not find process using port"
-            )
-
-        # Kill the process
-        if self.is_windows:
-            kill_cmd = f"taskkill /PID {pid} /F"
-        else:
-            kill_cmd = f"kill -9 {pid}"
-
-        success, output = self.run_command(kill_cmd)
-
-        if success:
-            return FixResult(
-                success=True,
-                action_taken=f"Killed process {pid} on port {port}",
-                output=output
-            )
-        else:
-            return FixResult(
-                success=False,
-                action_taken=f"Attempted to kill process {pid}",
-                error=output
-            )
+        holder = f"process {pid}" if pid else "an unknown process"
+        return FixResult(
+            success=False,
+            action_taken=f"Looked up port {port}",
+            error=(
+                f"Port {port} is held by {holder}. Stop it yourself if it is "
+                "safe to do so, or use a different port."
+            ),
+        )
 
     def _extract_port(self, error_message: str) -> Optional[int]:
         """Extract port number from error message"""
@@ -134,9 +116,9 @@ class NetworkAgent(BaseErrorAgent):
     def _find_process_on_port(self, port: int) -> Optional[int]:
         """Find the PID of process using a port"""
         if self.is_windows:
-            cmd = f"netstat -ano | findstr :{port}"
+            cmd = ["netstat", "-ano"]
         else:
-            cmd = f"lsof -t -i:{port}"
+            cmd = ["lsof", "-t", f"-i:{int(port)}"]
 
         success, output = self.run_command(cmd)
         if not success or not output:
@@ -147,7 +129,8 @@ class NetworkAgent(BaseErrorAgent):
             lines = output.strip().split('\n')
             for line in lines:
                 parts = line.split()
-                if len(parts) >= 5 and "LISTENING" in line:
+                if (len(parts) >= 5 and "LISTENING" in line
+                        and parts[1].endswith(f":{port}")):
                     try:
                         return int(parts[-1])
                     except ValueError:

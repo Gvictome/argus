@@ -2,6 +2,8 @@
 Hardware Agent - Handles GPIO, camera, sensor errors
 """
 
+import glob
+import os
 import re
 import platform
 from typing import Optional, Dict, List
@@ -184,18 +186,14 @@ class HardwareAgent(BaseErrorAgent):
 
     def _kill_camera_processes(self) -> FixResult:
         """Kill processes blocking the camera"""
-        commands = [
-            "sudo pkill -f libcamera",
-            "sudo pkill -f raspistill",
-            "sudo pkill -f raspivid",
-            "sudo pkill -f picamera",
-        ]
+        # Fixed process names only; nothing here comes from the error text.
+        names = ["libcamera", "raspistill", "raspivid", "picamera"]
 
         killed = []
-        for cmd in commands:
-            success, output = self.run_command(cmd)
+        for name in names:
+            success, output = self.run_command(["sudo", "pkill", "-f", name])
             if success:
-                killed.append(cmd)
+                killed.append(f"sudo pkill -f {name}")
 
         if killed:
             return FixResult(
@@ -231,20 +229,20 @@ class HardwareAgent(BaseErrorAgent):
         lines.append("Running on Raspberry Pi")
 
         # Check camera
-        success, output = self.run_command("libcamera-hello --list-cameras 2>&1 || echo 'libcamera not available'")
+        success, output = self.run_command(["libcamera-hello", "--list-cameras"])
+        if not success or not output:
+            output = "libcamera not available"
         lines.append(f"\nCamera check:\n{output[:200]}")
 
-        # Check I2C
-        success, output = self.run_command("ls /dev/i2c* 2>&1 || echo 'I2C not enabled'")
-        lines.append(f"\nI2C devices: {output.strip()}")
+        # Device nodes are listed with glob instead of a shell
+        i2c = " ".join(sorted(glob.glob("/dev/i2c*"))) or "I2C not enabled"
+        lines.append(f"\nI2C devices: {i2c}")
 
-        # Check SPI
-        success, output = self.run_command("ls /dev/spidev* 2>&1 || echo 'SPI not enabled'")
-        lines.append(f"\nSPI devices: {output.strip()}")
+        spi = " ".join(sorted(glob.glob("/dev/spidev*"))) or "SPI not enabled"
+        lines.append(f"\nSPI devices: {spi}")
 
-        # Check GPIO
-        success, output = self.run_command("ls /dev/gpiomem 2>&1 || echo 'GPIO not available'")
-        lines.append(f"\nGPIO: {output.strip()}")
+        gpio = "/dev/gpiomem" if os.path.exists("/dev/gpiomem") else "GPIO not available"
+        lines.append(f"\nGPIO: {gpio}")
 
         return "\n".join(lines)
 

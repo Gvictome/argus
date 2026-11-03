@@ -34,9 +34,8 @@ GUARDED = [
     ("POST", "/api/federated/round"),
     ("GET", "/api/federated/round"),
     ("POST", "/api/events/1/label"),
-    # routes.py: auto_fix executes remediation, so it must not be open.
+    # routes.py: error agents. /api/errors/fix was removed (Gate B F1).
     ("POST", "/api/errors/analyze"),
-    ("POST", "/api/errors/fix"),
     ("GET", "/api/errors/history"),
 ]
 

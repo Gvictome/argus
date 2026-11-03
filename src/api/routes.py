@@ -718,7 +718,7 @@ async def get_audit_logs(limit: int = 100):
 
 class ErrorRequest(BaseModel):
     error_message: str
-    auto_fix: bool = False
+    auto_fix: bool = False  # ignored; kept so old clients still validate
 
 
 class ErrorAnalysis(BaseModel):
@@ -728,13 +728,6 @@ class ErrorAnalysis(BaseModel):
     line_number: Optional[int]
     suggested_fix: Optional[str]
     auto_fixable: bool
-
-
-class FixResponse(BaseModel):
-    success: bool
-    action_taken: str
-    output: Optional[str]
-    error: Optional[str]
 
 
 @router.post("/api/errors/analyze", response_model=ErrorAnalysis, tags=["Error Agents"], dependencies=_PROTECTED)
@@ -760,25 +753,8 @@ async def analyze_error(request: ErrorRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/errors/fix", response_model=FixResponse, tags=["Error Agents"], dependencies=_PROTECTED)
-async def fix_error(request: ErrorRequest):
-    """
-    Attempt to automatically fix an error
-
-    Only works for errors marked as auto_fixable.
-    Set auto_fix=True to allow the agent to execute fixes.
-    """
-    try:
-        from src.agents.error_router import error_router
-        result = error_router.fix(request.error_message, auto_approve=request.auto_fix)
-        return FixResponse(
-            success=result.success,
-            action_taken=result.action_taken,
-            output=result.output,
-            error=result.error
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+# POST /api/errors/fix was removed for the Gate B review (fix F1): it ran
+# commands built from posted error text. /api/errors/analyze only suggests.
 
 
 @router.get("/api/errors/history", tags=["Error Agents"], dependencies=_PROTECTED)
