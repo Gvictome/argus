@@ -2,6 +2,7 @@
 API Routes for THE EYE
 """
 
+import re
 from datetime import datetime
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -200,6 +201,17 @@ async def camera_stream(request: Request, detect_every: int = 3, quality: int = 
     )
 
 
+_RECORDING_NAME = re.compile(r"[A-Za-z0-9_-]{1,64}\.mp4", re.IGNORECASE)
+
+
+def _is_safe_recording_name(filename: str) -> bool:
+    """True for a bare `name.mp4`; rejects paths, traversal and other extensions."""
+    return (
+        _RECORDING_NAME.fullmatch(filename) is not None
+        and Path(filename).name == filename
+    )
+
+
 @router.post("/api/camera/record", tags=["Camera"], dependencies=_PROTECTED)
 async def camera_record(start: bool = True, filename: Optional[str] = None):
     """Start or stop recording"""
@@ -207,6 +219,15 @@ async def camera_record(start: bool = True, filename: Optional[str] = None):
     from datetime import datetime
     from src.camera import camera_service
     from src.config import settings
+
+    # Basename only, ".mp4", no path separators: the name is joined onto
+    # MEDIA_DIR, so "../" or an absolute path would write anywhere (Gate B F2).
+    if start and filename is not None and not _is_safe_recording_name(filename):
+        raise HTTPException(
+            status_code=400,
+            detail="filename must be a plain name like clip.mp4 "
+                   "(letters, digits, _ or -, up to 64 characters, .mp4)",
+        )
 
     if not camera_service.is_initialized:
         raise HTTPException(status_code=503, detail="Camera not initialized")
