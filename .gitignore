@@ -108,3 +108,7 @@ deploy/node.env
 # Ultralytics weights fetched by scripts/compare_detectors.py
 /yolo11n.pt
 /yolo26n.pt
+
+# Node day (scripts/check_nodes.ps1, fl_round_all.ps1)
+deploy/nodes.txt
+node_day_reports/

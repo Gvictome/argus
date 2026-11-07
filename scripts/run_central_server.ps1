@@ -29,15 +29,20 @@ param(
   [int]$ApiPort = 8090,
   [string]$Token = "",
   [ValidateSet("robust", "fedavg")]
-  [string]$Aggregation = "robust"
+  [string]$Aggregation = "robust",
+  # Interpreter to run the aggregator with. Empty: the repo's .venv, else `python`.
+  [string]$Python = ""
 )
 
 $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent $PSScriptRoot
 Set-Location $repo
 
-$python = Join-Path $repo ".venv\Scripts\python.exe"
-if (-not (Test-Path $python)) { $python = "python" }
+$python = $Python
+if (-not $python) {
+  $python = Join-Path $repo ".venv\Scripts\python.exe"
+  if (-not (Test-Path $python)) { $python = "python" }
+}
 
 $env:ARGUS_FL_ADDRESS = "0.0.0.0:${FlPort}"
 $env:ARGUS_MIN_CLIENTS = "$MinClients"
@@ -77,4 +82,9 @@ if (-not (Get-NetFirewallRule -DisplayName "ARGUS FL" -ErrorAction SilentlyConti
   Write-Host ""
 }
 
+# The aggregator logs to stderr. Under "Stop", Windows PowerShell 5.1 turns
+# the first stderr line into a terminating error whenever output is
+# redirected (a log file, a launcher), killing the server at startup.
+$ErrorActionPreference = "Continue"
 & $python central_server\fl_aggregator.py
+exit $LASTEXITCODE

@@ -1,0 +1,8 @@
+# ARGUS nodes, one per line: <label> <ip>
+# Copy to deploy/nodes.txt (git-ignored) and fill in the real addresses.
+# Used by scripts/check_nodes.ps1, scripts/fl_round_all.ps1 and
+# scripts/fl_server_up.ps1 (which counts the lines for -MinClients).
+A 10.0.0.140
+# B 10.0.0.141
+# C 10.0.0.142
+# D 10.0.0.143
