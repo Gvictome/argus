@@ -20,6 +20,7 @@ import cv2
 import numpy as np
 
 from src.config import BASE_DIR
+from src.detection.hailo_runtime import HailoYolo, find_zoo_hef
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +77,14 @@ _YOLO_CLASS_MAP: dict[int, DetectionType] = {
     24: DetectionType.PACKAGE,  # backpack
     26: DetectionType.PACKAGE,  # handbag
     28: DetectionType.PACKAGE,  # suitcase
+}
+
+# COCO names for the mapped ids. Ultralytics supplies these on the CPU path;
+# a model-zoo HEF carries no names, so the Hailo path uses this table.
+_COCO_NAMES: dict[int, str] = {
+    0: "person", 1: "bicycle", 2: "car", 3: "motorcycle", 5: "bus",
+    6: "train", 7: "truck", 14: "bird", 15: "cat", 16: "dog", 17: "horse",
+    18: "sheep", 19: "cow", 24: "backpack", 26: "handbag", 28: "suitcase",
 }
 
 
@@ -225,6 +234,10 @@ class DetectionConfig:
     # accurate and slower, and must be exported at that name to be used
     # by an accelerated backend.
     model_name: str = "yolov8n"
+    # Try a model-zoo HEF on the Hailo-10H via HailoRT before anything else.
+    # Off by default for the same reason as cpu_export; the app turns it on
+    # from HAILO_ENABLED. Any load failure falls through to the CPU path.
+    hailo: bool = False
 
 
 class DetectionService:
@@ -278,7 +291,13 @@ class DetectionService:
                 hailo_model = _find_hailo_model()
                 cpu_export = _find_cpu_export(self.config.cpu_export, model_name)
 
-                if tensorrt_model.exists():
+                hailo_rt = self._load_hailo_rt(model_name) if self.config.hailo else None
+
+                if hailo_rt is not None:
+                    self.object_model = hailo_rt
+                    self.backend = "hailo"
+                    self.config.object_imgsz = hailo_rt.input_hw[0]
+                elif tensorrt_model.exists():
                     logger.info("TensorRT engine found — using Jetson GPU acceleration.")
                     self.object_model = _YOLO(str(tensorrt_model))
                     self.backend = "tensorrt"
@@ -297,7 +316,7 @@ class DetectionService:
                     self.object_model = _YOLO(f"{model_name}.pt")
                     self.backend = "cpu"
 
-                if self.backend == "hailo" or self.backend.startswith("cpu-"):
+                if (self.backend == "hailo" and hailo_rt is None) or self.backend.startswith("cpu-"):
                     export_path = hailo_model if self.backend == "hailo" else cpu_export[1]
                     fixed = _export_imgsz(export_path)
                     if fixed and fixed != self.config.object_imgsz:
@@ -428,6 +447,9 @@ class DetectionService:
         if self.object_model is None:
             return detections
 
+        if isinstance(self.object_model, HailoYolo):
+            return self._detect_objects_hailo(frame)
+
         try:
             results = self.object_model(
                 frame,
@@ -468,6 +490,38 @@ class DetectionService:
                 )
 
         return detections
+
+    @staticmethod
+    def _load_hailo_rt(model_name: str):
+        """HailoYolo on a model-zoo HEF, or None (missing HEF, no HailoRT, no chip)."""
+        hef = find_zoo_hef(BASE_DIR, model_name)
+        if hef is None:
+            return None
+        try:
+            model = HailoYolo(hef)
+        except Exception as exc:
+            logger.warning("Hailo HEF %s found but HailoRT failed (%s); using CPU.", hef, exc)
+            return None
+        logger.info("Running %s on the Hailo-10H (AI HAT+ 2).", hef.name)
+        return model
+
+    def _detect_objects_hailo(self, frame: np.ndarray) -> List[Detection]:
+        try:
+            boxes = self.object_model.infer(
+                frame, self.config.detection_threshold, set(_RELEVANT_COCO_IDS))
+        except Exception as exc:
+            logger.error("Hailo inference error: %s", exc)
+            return []
+        return [
+            Detection(
+                type=_YOLO_CLASS_MAP.get(cls_id, DetectionType.UNKNOWN),
+                confidence=score,
+                bbox=(x, y, w, h),
+                label=_COCO_NAMES.get(cls_id, "unknown"),
+                coco_id=cls_id,
+            )
+            for cls_id, score, x, y, w, h in boxes
+        ]
 
     def recognize_faces(self, frame: np.ndarray) -> List[Detection]:
         """

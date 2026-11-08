@@ -57,6 +57,9 @@ class Settings:
     # Object-model backend: auto | pt | openvino | ncnn. auto uses an
     # optimised CPU export from models/ when one is present.
     OBJECT_BACKEND: str = "auto"
+    # Run YOLO on the AI HAT+ 2 (Hailo-10H) when a model-zoo HEF is in
+    # models/hailo10h/ and HailoRT loads. False forces the CPU path.
+    HAILO_ENABLED: bool = True
     # Width motion detection downscales to before differencing.
     MOTION_WIDTH: int = 320
     # False runs YOLO on every frame (FR-19). True saves CPU but never

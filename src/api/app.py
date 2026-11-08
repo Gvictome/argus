@@ -126,6 +126,7 @@ def create_app() -> FastAPI:
             motion_gate=settings.MOTION_GATE,
             cpu_export=settings.OBJECT_BACKEND,
             model_name=settings.OBJECT_MODEL,
+            hailo=settings.HAILO_ENABLED,
         )
         detection_service.initialize()
         app.state.detection_service = detection_service
