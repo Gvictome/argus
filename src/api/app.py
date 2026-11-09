@@ -177,6 +177,7 @@ def create_app() -> FastAPI:
         if settings.RECORD_EVENTS:
             try:
                 from src.detection.event_recorder import EventRecorder, RecorderConfig
+                from src.detection import DetectionType
                 def _log_clip(record, _db=db):
                     """Put every finished clip in the events table."""
                     import json as _json
@@ -192,15 +193,27 @@ def create_app() -> FastAPI:
                         )
                     except Exception as exc:
                         logger.warning("Could not log clip: %s", exc)
+                    # The keeper is built after the sample store, below.
+                    keeper = getattr(app.state, "clip_keeper", None)
+                    if keeper is not None:
+                        keeper.on_clip(record)
 
+                def _can_record():
+                    keeper = getattr(app.state, "clip_keeper", None)
+                    return keeper.can_record() if keeper is not None else True
+
+                config = RecorderConfig(
+                    pre_roll_s=settings.RECORD_PRE_ROLL_S,
+                    post_roll_s=settings.RECORD_POST_ROLL_S,
+                    max_clip_s=settings.RECORD_MAX_CLIP_S,
+                )
+                if settings.RECORD_P1_ONLY:
+                    # An anomaly can be any class, and clips nothing claims
+                    # are deleted anyway, so animals record too.
+                    config.triggers.add(DetectionType.ANIMAL)
                 app.state.event_recorder = EventRecorder(
-                    RecorderConfig(
-                        pre_roll_s=settings.RECORD_PRE_ROLL_S,
-                        post_roll_s=settings.RECORD_POST_ROLL_S,
-                        max_clip_s=settings.RECORD_MAX_CLIP_S,
-                    ),
-                    camera_name="primary",
-                    on_clip=_log_clip,
+                    config, camera_name="primary",
+                    on_clip=_log_clip, can_record=_can_record,
                 )
                 logger.info(
                     "Event recording on — %.0fs pre-roll, %.0fs post-roll",
@@ -227,6 +240,10 @@ def create_app() -> FastAPI:
             app.state.fl_collector = EventCollector(
                 store=app.state.fl_store, db=db,
                 snapshot_dir=Path(settings.DATA_DIR) / "snapshots",
+                stationary_classes=(
+                    [c.strip() for c in settings.STATIONARY_CLASSES.split(",") if c.strip()]
+                    if settings.STATIONARY_SUPPRESS else ()),
+                stationary_keep_s=settings.STATIONARY_KEEP_S,
             )
             detection_service.attach_collector(app.state.fl_collector)
             logger.info(
@@ -240,6 +257,23 @@ def create_app() -> FastAPI:
             app.state.fl_head = None
             app.state.fl_store = None
             app.state.fl_collector = None
+
+        # Clip keeper: keeps footage only around priority-1 events and holds
+        # the clip folder under RECORD_MAX_GB.
+        app.state.clip_keeper = None
+        if (app.state.event_recorder is not None and settings.RECORD_P1_ONLY
+                and getattr(app.state, "fl_store", None) is not None):
+            from src.detection.clip_keeper import ClipKeeper
+            app.state.clip_keeper = ClipKeeper(
+                clip_dir=Path(settings.MEDIA_DIR) / "events",
+                store=app.state.fl_store,
+                head_source=lambda: getattr(app.state, "fl_head", None),
+                max_bytes=int(settings.RECORD_MAX_GB * 1e9),
+                min_free_bytes=int(settings.RECORD_MIN_FREE_GB * 1e9),
+                grace_s=settings.RECORD_GRACE_S,
+            )
+            app.state.clip_keeper.start()
+            logger.info("Clip keeper on: P1 clips only, cap %.1f GB", settings.RECORD_MAX_GB)
 
         # Restore the last accepted federated model, so an update survives a
         # restart instead of reverting to random weights.
@@ -260,6 +294,27 @@ def create_app() -> FastAPI:
                 recorder=app.state.event_recorder,
             )
             app.state.detection_worker.start()
+
+        # Thermal monitor. Samples the SoC temperature, throttle flags and
+        # fan next to the detection rate, so an enclosure soak test is a
+        # record rather than a spot check. Harmless off a Pi: every reading
+        # is None.
+        app.state.thermal_monitor = None
+        if settings.THERMAL_ENABLED:
+            from src.system.thermal import ThermalMonitor
+
+            def _detect_fps():
+                worker = getattr(app.state, "detection_worker", None)
+                return worker.detect_rate.value() if worker is not None and worker.running else None
+
+            app.state.thermal_monitor = ThermalMonitor(
+                node=settings.NODE_NAME,
+                enclosure=settings.THERMAL_ENCLOSURE,
+                interval_s=settings.THERMAL_SAMPLE_S,
+                log_dir=settings.DATA_DIR / "thermal",
+                fps_source=_detect_fps,
+            )
+            app.state.thermal_monitor.start()
 
         # The federated cron. It runs exactly the round the manual trigger
         # runs: train the head on this node's labelled events in a separate
@@ -294,6 +349,9 @@ def create_app() -> FastAPI:
         worker = getattr(app.state, "detection_worker", None)
         if worker is not None:
             worker.stop()
+        thermal = getattr(app.state, "thermal_monitor", None)
+        if thermal is not None:
+            thermal.stop()
         collector = getattr(app.state, "fl_collector", None)
         if collector is not None:
             collector.flush()
@@ -306,6 +364,9 @@ def create_app() -> FastAPI:
         recorder = getattr(app.state, "event_recorder", None)
         if recorder is not None:
             recorder.close()
+        keeper = getattr(app.state, "clip_keeper", None)
+        if keeper is not None:
+            keeper.stop()
 
         # Release every camera. A CSI sensor left open blocks the next
         # process from acquiring it, which turns one crash into a reboot.

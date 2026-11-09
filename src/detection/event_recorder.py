@@ -94,10 +94,13 @@ class EventRecorder:
     """
 
     def __init__(self, config: Optional[RecorderConfig] = None,
-                 camera_name: str = "camera0", on_clip=None):
+                 camera_name: str = "camera0", on_clip=None, can_record=None):
         self.config = config or RecorderConfig()
         self.camera_name = camera_name
         self._on_clip = on_clip
+        # Asked before every new clip; False (disk nearly full) skips it.
+        self._can_record = can_record
+        self._skip_logged_at = float("-inf")
 
         buffer_frames = max(1, int(self.config.pre_roll_s * self.config.fps))
         self._pre_roll: Deque[np.ndarray] = deque(maxlen=buffer_frames)
@@ -201,6 +204,13 @@ class EventRecorder:
 
     def _start_clip(self, frame: np.ndarray, trigger: Detection, now: float) -> None:
         import cv2
+
+        if self._can_record is not None and not self._can_record():
+            # Asked on every triggering frame, so log once a minute at most.
+            if now - self._skip_logged_at >= 60:
+                logger.warning("Recording skipped: disk below the free-space floor")
+                self._skip_logged_at = now
+            return
 
         out_dir = self._output_dir()
         try:

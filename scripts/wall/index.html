@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ARGUS Wall</title>
+<!--
+  Every node and the aggregator on one laptop screen.
+  Served by scripts/run_wall.ps1 on http://localhost:3001 (an origin the
+  nodes already allow in CORS_ORIGINS). Nodes and aggregator come from the
+  query string:  ?nodes=10.0.0.140,argus-b.local,argus-c.local&agg=10.0.0.239:8090
+-->
+<style>
+:root { --bg:#0e1116; --card:#161b22; --line:#2a313c; --text:#e6edf3; --muted:#8b949e;
+        --ok:#3fb950; --warn:#d29922; --bad:#f85149; --accent:#58a6ff; }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--text); font:14px/1.4 system-ui, Segoe UI, Arial, sans-serif; }
+header { display:flex; flex-wrap:wrap; gap:18px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); }
+header h1 { font-size:16px; margin:0; letter-spacing:.08em; }
+.stat { color:var(--muted); } .stat b { color:var(--text); font-weight:600; }
+main { display:grid; grid-template-columns:repeat(auto-fit, minmax(380px, 1fr)); gap:14px; padding:14px 16px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:10px; overflow:hidden; display:flex; flex-direction:column; }
+.top { display:flex; justify-content:space-between; align-items:center; padding:9px 12px; gap:8px; }
+.name { font-weight:700; } .zone { color:var(--muted); margin-left:6px; font-weight:400; }
+.dot { display:inline-block; width:9px; height:9px; border-radius:50%; background:var(--bad); margin-right:7px; }
+.dot.on { background:var(--ok); }
+.video { position:relative; background:#000; aspect-ratio:16/9; }
+.video img { width:100%; height:100%; object-fit:contain; display:block; }
+.video .off { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--muted); }
+.nums { display:grid; grid-template-columns:repeat(5, 1fr); border-top:1px solid var(--line); }
+.nums div { padding:7px 10px; border-right:1px solid var(--line); }
+.nums div:last-child { border-right:0; }
+.nums small { display:block; color:var(--muted); font-size:11px; }
+.events { border-top:1px solid var(--line); padding:6px 8px; display:flex; gap:6px; overflow-x:auto; min-height:92px; }
+.ev { flex:0 0 110px; font-size:11px; color:var(--muted); }
+.ev img, .ev .ph { width:110px; height:62px; object-fit:cover; border-radius:5px; background:#000; display:block; }
+.ev .lbl { color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.ev.anom .lbl { color:var(--bad); }
+.empty { color:var(--muted); padding:28px 6px; font-size:12px; }
+section.agg { margin:0 16px 16px; background:var(--card); border:1px solid var(--line); border-radius:10px; }
+section.agg h2 { font-size:13px; margin:0; padding:9px 12px; border-bottom:1px solid var(--line); color:var(--muted); font-weight:600; }
+table { width:100%; border-collapse:collapse; font-size:13px; }
+th, td { text-align:left; padding:6px 12px; border-bottom:1px solid var(--line); }
+th { color:var(--muted); font-weight:500; }
+a { color:var(--accent); }
+@media (max-width:480px) { main { grid-template-columns:1fr; padding:10px; } section.agg { margin:0 10px 10px; } }
+</style>
+</head><body>
+<header>
+  <h1>ARGUS</h1>
+  <span class="stat">aggregator <b id="aggState">…</b></span>
+  <span class="stat">round <b id="aggRound">–</b></span>
+  <span class="stat">global model <b id="aggVersion">–</b></span>
+  <span class="stat">clients connected <b id="aggClients">–</b></span>
+  <span class="stat">registered nodes <b id="aggNodes">–</b></span>
+</header>
+<main id="grid"></main>
+<section class="agg">
+  <h2>Registered with the aggregator</h2>
+  <table><thead><tr><th>Node</th><th>IP</th><th>Status</th><th>Rounds</th><th>Samples</th><th>Last loss</th><th>Last seen</th></tr></thead>
+  <tbody id="reg"><tr><td colspan="7" class="stat">waiting for the aggregator…</td></tr></tbody></table>
+</section>
+<script>
+const q = new URLSearchParams(location.search);
+const NODES = (q.get('nodes') || '10.0.0.140,argus-b.local,argus-c.local').split(',').map(s => s.trim()).filter(Boolean);
+const AGG = q.get('agg') || '10.0.0.239:8090';
+const PORT = q.get('port') || '8000';
+
+const base = h => `http://${h.includes(':') ? h : h + ':' + PORT}`;
+const $ = (sel, root = document) => root.querySelector(sel);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
+
+async function getJson(url, ms = 3000) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), ms);
+  try {
+    const r = await fetch(url, { signal: ctl.signal, cache: 'no-store' });
+    if (!r.ok) throw new Error(r.status);
+    return await r.json();
+  } finally { clearTimeout(t); }
+}
+
+const state = {};
+for (const host of NODES) {
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.innerHTML = `
+    <div class="top"><div><span class="dot"></span><span class="name">${esc(host)}</span><span class="zone"></span></div>
+      <a href="${base(host)}/dashboard" target="_blank">open</a></div>
+    <div class="video"><img alt=""><div class="off">connecting…</div></div>
+    <div class="nums">
+      <div><small>detect FPS</small><b class="fps">–</b></div>
+      <div><small>backend</small><b class="be">–</b></div>
+      <div><small>model</small><b class="mv">–</b></div>
+      <div><small>labelled / events</small><b class="sm">–</b></div>
+      <div><small>SoC temp</small><b class="tc">–</b></div>
+    </div>
+    <div class="events"><div class="empty">no events yet</div></div>`;
+  $('#grid').appendChild(card);
+  state[host] = { card, online: false };
+}
+
+function setOnline(host, on) {
+  const s = state[host];
+  if (s.online === on) return;
+  s.online = on;
+  $('.dot', s.card).classList.toggle('on', on);
+  const img = $('.video img', s.card), off = $('.video .off', s.card);
+  if (on) {
+    img.src = `${base(host)}/api/camera/stream?quality=70&t=${Date.now()}`;
+    img.onerror = () => { off.textContent = 'no video'; off.style.display = 'flex'; };
+    img.onload = () => { off.style.display = 'none'; };
+    off.textContent = 'starting video…';
+  } else {
+    img.removeAttribute('src');
+    off.textContent = 'offline';
+    off.style.display = 'flex';
+  }
+}
+
+async function pollStatus(host) {
+  const s = state[host];
+  try {
+    const [st, det] = await Promise.all([getJson(`${base(host)}/api/status`), getJson(`${base(host)}/api/detection/status`)]);
+    setOnline(host, true);
+    $('.name', s.card).textContent = st.node || host;
+    $('.zone', s.card).textContent = host;
+    $('.fps', s.card).textContent = st.fps;
+    $('.be', s.card).textContent = `${det.backend || st.accelerator} ${det.model || ''}`.trim();
+    $('.mv', s.card).textContent = st.model_version ?? '–';
+    const smp = st.samples || {};
+    const labelled = smp.labelled ?? smp.labeled ?? smp.n_labelled;
+    const total = smp.total ?? smp.n ?? smp.count;
+    $('.sm', s.card).textContent = (labelled ?? '–') + ' / ' + (total ?? '–');
+    // Older nodes have no thermal endpoint; leave the tile at a dash.
+    getJson(`${base(host)}/api/system/thermal`).then(t => {
+      const c = t.current && t.current.soc_temp_c;
+      const el = $('.tc', s.card);
+      el.textContent = c == null ? '–' : c.toFixed(1) + '°C' + (t.throttled.now.length ? ' ⚠' : '');
+      el.style.color = c == null ? '' : c >= t.limits_c.soft ? 'var(--bad)' : c >= 70 ? 'var(--warn)' : 'var(--ok)';
+    }).catch(() => {});
+  } catch (e) {
+    setOnline(host, false);
+    $('.fps', s.card).textContent = '–';
+  }
+}
+
+async function pollEvents(host) {
+  const s = state[host];
+  if (!s.online) return;
+  try {
+    const evs = await getJson(`${base(host)}/api/events?limit=8`);
+    const box = $('.events', s.card);
+    if (!evs.length) { box.innerHTML = '<div class="empty">no events yet</div>'; return; }
+    box.innerHTML = evs.map(e => `
+      <div class="ev ${e.status === 'stranger' ? 'anom' : ''}">
+        ${e.snapshot ? `<img loading="lazy" src="${base(host)}${esc(e.snapshot)}" alt="">` : '<div class="ph"></div>'}
+        <div class="lbl">${esc(e.label)}${e.confirmed ? ' ✓' : ''}</div>
+        <div>${esc(new Date(e.ts).toLocaleTimeString())}</div>
+      </div>`).join('');
+  } catch (e) { /* the status poll marks the node offline */ }
+}
+
+async function pollAggregator() {
+  try {
+    const [st, nodes] = await Promise.all([getJson(`http://${AGG}/api/status`), getJson(`http://${AGG}/api/nodes`)]);
+    $('#aggState').textContent = st.status || 'running';
+    $('#aggRound').textContent = `${st.current_round} / ${st.total_rounds}`;
+    $('#aggVersion').textContent = st.model_version;
+    $('#aggClients').textContent = st.connected_clients;
+    $('#aggNodes').textContent = st.registered_nodes;
+    const list = Array.isArray(nodes) ? nodes : Object.values(nodes || {});
+    $('#reg').innerHTML = list.length ? list.map(n => `
+      <tr><td>${esc(n.hostname || n.node_id)}</td><td>${esc(n.ip)}</td><td>${esc(n.status)}</td>
+      <td>${esc(n.fl_rounds_participated)}</td><td>${esc(n.last_samples)}</td>
+      <td>${n.last_loss ? Number(n.last_loss).toFixed(4) : '–'}</td><td>${esc(n.last_seen)}</td></tr>`).join('')
+      : '<tr><td colspan="7" class="stat">no nodes registered yet (a node registers on its first round)</td></tr>';
+  } catch (e) {
+    $('#aggState').textContent = 'offline';
+    $('#reg').innerHTML = `<tr><td colspan="7" class="stat">aggregator not reachable at ${esc(AGG)} (start scripts\\run_central_server.ps1)</td></tr>`;
+  }
+}
+
+function tick() { NODES.forEach(pollStatus); pollAggregator(); }
+tick();
+setInterval(tick, 2000);
+setInterval(() => NODES.forEach(pollEvents), 5000);
+setTimeout(() => NODES.forEach(pollEvents), 800);
+</script>
+</body></html>
