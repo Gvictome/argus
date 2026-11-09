@@ -305,6 +305,7 @@ class OpenCVBackend(CaptureBackend):
             fps = self._cap.get(cv2.CAP_PROP_FPS) or self.framerate or 30
             self._period = 1.0 / fps if self.realtime else 0.0
         else:
+            self._cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
             self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
             self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
             self._cap.set(cv2.CAP_PROP_FPS, self.framerate)
