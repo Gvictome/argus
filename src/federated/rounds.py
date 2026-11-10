@@ -53,7 +53,8 @@ def _rounds_completed(run_dir: Path) -> int:
 
 def run_round_blocking(app, server: Optional[str] = None, epochs: int = 6,
                        tolerance: float = 0.01, min_samples: int = 200,
-                       timeout_s: float = 1800.0) -> dict:
+                       timeout_s: float = 1800.0,
+                       human_only: Optional[bool] = None) -> dict:
     """Join one round and gate the result. Blocks; call it off the event loop.
 
     The result carries `completed`: True once a global model came back and
@@ -67,10 +68,13 @@ def run_round_blocking(app, server: Optional[str] = None, epochs: int = 6,
         return {"accepted": False, "completed": False,
                 "reason": "federated head not initialised"}
 
-    X, _ = store.labelled()
+    if human_only is None:
+        human_only = settings.FL_HUMAN_ONLY
+    X, _ = store.labelled(human_only=human_only)
     if len(X) < min_samples:
+        kind = "human-reviewed labels" if human_only else "labelled samples"
         return {"accepted": False, "completed": False,
-                "reason": f"only {len(X)} labelled samples, need {min_samples}"}
+                "reason": f"only {len(X)} {kind}, need {min_samples}"}
 
     server = server or settings.FL_SERVER_URL
     run_dir = Path(settings.DATA_DIR) / "fl_rounds" / time.strftime("%Y%m%d-%H%M%S")
@@ -86,6 +90,8 @@ def run_round_blocking(app, server: Optional[str] = None, epochs: int = 6,
         "--epochs", str(epochs),
         "--node-name", settings.NODE_NAME,
     ]
+    if human_only:
+        cmd.append("--human-only")
     if getattr(settings, "FL_CENTRAL_API", ""):
         cmd += ["--central-api", settings.FL_CENTRAL_API]
 
@@ -118,6 +124,7 @@ def run_round_blocking(app, server: Optional[str] = None, epochs: int = 6,
     decision = model_state.accept_candidate(
         app, candidate, "federated", tolerance,
         {"rounds": rounds, "run_dir": str(run_dir), "server": server},
+        human_only=human_only,
     )
     # The round happened whether or not the gate took the model: a rejection
     # is a result, and it should not be retried every hour until accepted.

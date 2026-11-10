@@ -30,6 +30,8 @@ from pydantic import BaseModel
 from src.config import settings
 from src.federated import model_state
 from src.federated.features import LABEL_NAMES, N_CLASSES, N_FEATURES
+from src.federated.store import ReviewedLabelConflict
+from src.federated.suggest import SuggestionStore, generate_suggestions
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +49,7 @@ _state = {
     "round_log": [],
     "round_dir": None,
     "round_result": None,
+    "round_human_only": False,
     "last_metrics": None,
 }
 
@@ -84,9 +87,51 @@ async def label_sample(sample_id: str, body: LabelRequest, request: Request):
     st = _store(request)
     if not 0 <= body.label < N_CLASSES:
         raise HTTPException(422, f"label must be 0..{N_CLASSES - 1}")
-    if not st.set_label(sample_id, body.label):
+    try:
+        found = st.set_label(sample_id, body.label)
+    except ReviewedLabelConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    if not found:
         raise HTTPException(404, f"sample {sample_id} not found")
     return {"id": sample_id, "label": LABEL_NAMES[body.label], "stats": st.stats()}
+
+
+# ============================================================================
+# Suggestions: machine proposals, kept apart from labels
+# ============================================================================
+
+class GenerateSuggestionsRequest(BaseModel):
+    # Events the console holds for its test set, which must never be pre-filled.
+    exclude: List[int] = []
+
+
+def _suggestion_store(st) -> SuggestionStore:
+    return SuggestionStore(st.path.parent / "suggestions.jsonl")
+
+
+@router.get("/api/federated/suggestions", tags=["Federated"])
+async def list_suggestions(request: Request):
+    """Current machine suggestions for events no person has reviewed.
+
+    Reading never changes a label. A suggestion for an event reviewed since
+    it was generated is dropped here, so review state has one source: the
+    row itself.
+    """
+    st = _store(request)
+    return _suggestion_store(st).current(st)
+
+
+@router.post("/api/federated/suggestions/generate", tags=["Federated"])
+async def generate(body: GenerateSuggestionsRequest, request: Request):
+    """Recompute suggestions for every unreviewed event.
+
+    Writes only the suggestions file. Never touches a label.
+    """
+    st, head = _store(request), _head(request)
+    version = model_state.model_version(request.app)
+    return await asyncio.to_thread(
+        generate_suggestions, st, _suggestion_store(st), head,
+        None if version == "untrained" else version, set(body.exclude))
 
 
 class BootstrapRequest(BaseModel):
@@ -162,13 +207,14 @@ class TrainRequest(BaseModel):
     epochs: int = 8
     min_samples: int = 200
     tolerance: float = 0.01
+    human_only: bool = False
 
 
-def _train_local_candidate(app, epochs: int):
+def _train_local_candidate(app, epochs: int, human_only: bool = False):
     from src.federated.head import FederatedHead
     from src.federated.store import holdout_split
 
-    X, y = app.state.fl_store.labelled()
+    X, y = app.state.fl_store.labelled(human_only=human_only)
     Xt, yt, _, _ = holdout_split(X, y, seed=0)
     candidate = FederatedHead(seed=0)
     candidate.set_weights(app.state.fl_head.get_weights())
@@ -188,18 +234,20 @@ async def train_head(body: TrainRequest, request: Request):
     """
     _head(request)
     st = _store(request)
-    X, _ = st.labelled()
+    X, _ = st.labelled(human_only=body.human_only)
     if len(X) < body.min_samples:
+        kind = "human-reviewed labels" if body.human_only else "labelled samples"
         raise HTTPException(
             409,
-            f"only {len(X)} labelled samples, need {body.min_samples}. "
+            f"only {len(X)} {kind}, need {body.min_samples}. "
             f"Label more, or POST /api/federated/samples/bootstrap.",
         )
     path, secs, n_train = await asyncio.to_thread(
-        _train_local_candidate, request.app, body.epochs)
+        _train_local_candidate, request.app, body.epochs, body.human_only)
     decision = await asyncio.to_thread(
         model_state.accept_candidate, request.app, path, "local-train",
-        body.tolerance, {"seconds": secs, "train_samples": n_train})
+        body.tolerance, {"seconds": secs, "train_samples": n_train},
+        human_only=body.human_only)
     _state["last_metrics"] = decision
     return decision
 
@@ -224,6 +272,7 @@ class RoundRequest(BaseModel):
     epochs: int = 6
     min_samples: int = 200
     tolerance: float = 0.01
+    human_only: bool = False
 
 
 def _pump(proc, sink: List[str]):
@@ -233,7 +282,8 @@ def _pump(proc, sink: List[str]):
     proc.stdout.close()
 
 
-def _finish_round(app, proc, run_dir: Path, tolerance: float):
+def _finish_round(app, proc, run_dir: Path, tolerance: float,
+                  human_only: bool = False):
     """Wait for the client, then gate the returned global model into the node."""
     code = proc.wait()
     candidate = run_dir / "global.npz"
@@ -260,7 +310,7 @@ def _finish_round(app, proc, run_dir: Path, tolerance: float):
     try:
         decision = model_state.accept_candidate(
             app, candidate, "federated", tolerance,
-            {"rounds": rounds, "run_dir": str(run_dir)})
+            {"rounds": rounds, "run_dir": str(run_dir)}, human_only=human_only)
     except Exception as exc:
         logger.exception("Validation gate failed")
         decision = {"accepted": False, "reason": f"gate failed: {exc}"}
@@ -280,10 +330,11 @@ async def start_round(body: RoundRequest, request: Request):
         raise HTTPException(409, "a round is already running")
 
     st, head = _store(request), _head(request)
-    X, _ = st.labelled()
+    X, _ = st.labelled(human_only=body.human_only)
     if len(X) < body.min_samples:
+        kind = "human-reviewed labels" if body.human_only else "labelled samples"
         raise HTTPException(
-            409, f"only {len(X)} labelled samples, need {body.min_samples}")
+            409, f"only {len(X)} {kind}, need {body.min_samples}")
 
     server = body.server or settings.FL_SERVER_URL
     run_dir = Path(settings.DATA_DIR) / "fl_rounds" / time.strftime("%Y%m%d-%H%M%S")
@@ -303,6 +354,8 @@ async def start_round(body: RoundRequest, request: Request):
            "--node-name", settings.NODE_NAME]
     if getattr(settings, "FL_CENTRAL_API", ""):
         cmd += ["--central-api", settings.FL_CENTRAL_API]
+    if body.human_only:
+        cmd.append("--human-only")
 
     proc = subprocess.Popen(
         cmd,
@@ -310,13 +363,15 @@ async def start_round(body: RoundRequest, request: Request):
         stderr=subprocess.STDOUT, text=True, bufsize=1,
     )
     _state.update(round_proc=proc, round_started=time.time(), round_log=[],
-                  round_dir=str(run_dir), round_result=None)
+                  round_dir=str(run_dir), round_result=None,
+                  round_human_only=body.human_only)
     threading.Thread(target=_pump, args=(proc, _state["round_log"]),
                      daemon=True).start()
     threading.Thread(target=_finish_round,
-                     args=(request.app, proc, run_dir, body.tolerance),
+                     args=(request.app, proc, run_dir, body.tolerance,
+                           body.human_only),
                      daemon=True).start()
-    return {"started": True, "server": server,
+    return {"started": True, "server": server, "human_only": body.human_only,
             "labelled_samples": int(len(X)), "run_dir": str(run_dir)}
 
 
@@ -329,6 +384,7 @@ async def round_status():
         "exit_code": None if running or proc is None else proc.returncode,
         "started": _state["round_started"],
         "run_dir": _state["round_dir"],
+        "human_only": _state["round_human_only"],
         "result": _state["round_result"],
         "log": _state["round_log"][-60:],
     }

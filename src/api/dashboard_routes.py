@@ -43,6 +43,7 @@ from pydantic import BaseModel
 
 from src.config import settings
 from src.federated.features import ANOMALY, CLASS_NAMES, LABEL_NAMES
+from src.federated.store import ReviewedLabelConflict, human_prov, provenance
 
 logger = logging.getLogger(__name__)
 
@@ -231,9 +232,41 @@ def build_events(request: Request, limit: int = 50) -> List[dict]:
     return out
 
 
+class ReviewBody(BaseModel):
+    """Sent by a console when a person made this decision on this event."""
+    kind: str                               # "blind" | "correct" | "accept"
+    suggested_label: Optional[str] = None
+    suggested_source: Optional[str] = None
+    via: Optional[str] = None               # which queue or view it came from
+
+
 class LabelBody(BaseModel):
     action: str                  # "confirm" | "correct"
     label: Optional[str] = None  # class name or ARGUS label name
+    # Absent means the write is recorded as an unattributed machine label,
+    # so an old console or a script can never claim a person's review.
+    review: Optional[ReviewBody] = None
+
+
+def _review_prov(body: LabelBody, y: int) -> Optional[dict]:
+    """Provenance for a reviewed write. None when no review was claimed."""
+    review = body.review
+    if review is None:
+        return None
+    # `confirm` means "whatever the model called it", and free text is
+    # guessed at. Neither is a person naming a label, so neither is a review.
+    if body.action != "correct" or body.label not in LABEL_NAMES:
+        raise HTTPException(
+            422, 'a reviewed label needs action "correct" and an exact label name')
+    suggested = None
+    if review.suggested_label is not None:
+        if review.suggested_label not in LABEL_NAMES:
+            raise HTTPException(422, "unknown suggested_label")
+        suggested = LABEL_NAMES.index(review.suggested_label)
+    try:
+        return human_prov(y, review.kind, suggested, review.suggested_source, review.via)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 def _resolve_label(action: str, label: Optional[str], current: dict) -> int:
@@ -300,13 +333,20 @@ async def label_event(event_id: int, body: LabelBody, request: Request):
 
     current = _event_from_row(row, head)
     y = _resolve_label(body.action, body.label, current)
-    store.set_label_by_n(event_id, y, note=body.label)
+    prov = _review_prov(body, y)
+    try:
+        store.set_label_by_n(event_id, y, note=body.label, prov=prov)
+    except ReviewedLabelConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
 
     return {
         "ok": True,
         "id": event_id,
         "label": LABEL_NAMES[y],
         "labelled_total": store.stats()["labelled"],
+        # Echoed so the console can tell a node that recorded the review
+        # from one running older code that silently ignored it.
+        "provenance": provenance(store.by_n(event_id)),
     }
 
 

@@ -204,6 +204,8 @@ class Settings:
     # target: the simulator's heads sit around 0.72, so anything healthy
     # clears it. Set to 0 to disable.
     FL_MIN_ANOMALY_RECALL: float = 0.5
+    # Scheduled rounds train only on labels a person reviewed.
+    FL_HUMAN_ONLY: bool = False
     FL_TRAINING_DIR: Optional[Path] = None  # set in __post_init__
     # Persisted last-round timestamp. Without this the interval restarts
     # on every reboot and a regularly-restarted host never runs a round.
@@ -278,6 +280,7 @@ class Settings:
             FL_ROUND_HOUR=int(os.getenv("FL_ROUND_HOUR", 2)),
             FL_ROUND_INTERVAL_DAYS=int(os.getenv("FL_ROUND_INTERVAL_DAYS", 14)),
             FL_MIN_ANOMALY_RECALL=float(os.getenv("FL_MIN_ANOMALY_RECALL", 0.5)),
+            FL_HUMAN_ONLY=os.getenv("FL_HUMAN_ONLY", "false").lower() == "true",
             # Cameras: "sensor_id:name" comma-separated. The Orin has two
             # CSI connectors, so the demo host runs "0:front,1:back".
             CAMERA_SENSORS=os.getenv("CAMERA_SENSORS", ""),

@@ -74,7 +74,7 @@ def main() -> int:
     from src.detection import DetectionConfig, DetectionService
     from src.federated.collector import EventCollector
     from src.federated.features import CLASS_NAMES, LABEL_NAMES
-    from src.federated.store import SampleStore
+    from src.federated.store import SampleStore, machine_prov
 
     if args.label and args.label_by_class:
         print("--label and --label-by-class do the same job two ways; pick one")
@@ -150,7 +150,8 @@ def main() -> int:
             applied = (class_to_label[CLASS_NAMES[int(head.argmax())]]
                        if head.any() else None)
         if applied is not None:
-            store.set_label_by_n(row["n"], applied, note=f"clip:{video.name}")
+            store.set_label_by_n(row["n"], applied, note=f"clip:{video.name}",
+                                 prov=machine_prov(f"clip:{video.name}"))
             tally[LABEL_NAMES[applied]] = tally.get(LABEL_NAMES[applied], 0) + 1
         else:
             tally["unlabelled"] = tally.get("unlabelled", 0) + 1
