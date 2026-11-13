@@ -67,6 +67,13 @@ DEFAULT_RETENTION_DAYS = int(os.getenv("ARGUS_RETENTION_DAYS", "30"))
 MAX_UPLOAD = 200 * 1024 * 1024
 SWEEP_EVERY_S = 3600
 
+TYPE_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+# What a node uploads until someone changes it on the Events tab. Vehicles
+# are off: a street-facing camera records dozens an hour.
+DEFAULT_UPLOAD_TYPES = ["human", "dangerous_person", "face", "package", "anomaly"]
+# Shown as toggles even before a node has reported in.
+BASE_TYPES = ["human", "vehicle", "dangerous_person", "face", "package", "animal", "anomaly"]
+
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,95}$")
 LOCAL = {"127.0.0.1", "::1", "localhost"}
 
@@ -81,7 +88,30 @@ def load_settings() -> dict:
     except (OSError, ValueError):
         data = {}
     data.setdefault("retention_days", DEFAULT_RETENTION_DAYS)
+    data.setdefault("upload_types", {})     # node -> [types]; missing = defaults
+    data.setdefault("known_types", {})      # node -> [types it can record]
+    data.setdefault("last_seen", {})        # node -> ISO time of last config fetch
     return data
+
+
+def upload_types_for(data: dict, node: str) -> list:
+    return list(data["upload_types"].get(node, DEFAULT_UPLOAD_TYPES))
+
+
+def settings_view(data: dict) -> dict:
+    with _db_lock, db() as conn:
+        seen = [r[0] for r in conn.execute("SELECT DISTINCT node FROM events")]
+    nodes = sorted(set(seen) | set(data["known_types"]) | set(data["upload_types"]))
+    return {
+        "retention_days": data["retention_days"],
+        "defaults": DEFAULT_UPLOAD_TYPES,
+        "nodes": [{
+            "node": n,
+            "known_types": data["known_types"].get(n, BASE_TYPES),
+            "upload_types": upload_types_for(data, n),
+            "last_seen": data["last_seen"].get(n),
+        } for n in nodes],
+    }
 
 
 def save_settings(data: dict) -> None:
@@ -320,7 +350,7 @@ def health(request: Request):
     with _db_lock, db() as conn:
         n = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
     return {"ok": True, "events": n, "events_dir": str(EVENTS_DIR),
-            "saved_dir": str(SAVED_DIR), **load_settings()}
+            "saved_dir": str(SAVED_DIR), "retention_days": load_settings()["retention_days"]}
 
 
 @app.put("/api/ingest/{event_id}/thumb")
@@ -398,7 +428,8 @@ def list_events(request: Request, node: Optional[str] = None,
         nodes = [r[0] for r in conn.execute("SELECT DISTINCT node FROM events ORDER BY node")]
         types = [r[0] for r in conn.execute("SELECT DISTINCT event_type FROM events ORDER BY 1")]
     return {"events": [public(dict(r)) for r in rows], "total": total,
-            "nodes": nodes, "event_types": types, **load_settings()}
+            "nodes": nodes, "event_types": types,
+            "retention_days": load_settings()["retention_days"]}
 
 
 @app.get("/api/events/{event_id}")
@@ -462,27 +493,71 @@ def event_delete(event_id: str, request: Request):
     return {"ok": True}
 
 
+_settings_lock = threading.Lock()
+
+
+@app.get("/api/node-config")
+def node_config(request: Request, node: str, known: str = ""):
+    """Polled by each node (about once a minute): which event types to
+    upload. The node reports the types it can record, for the console."""
+    check_token(request, always=True)
+    node = node.strip()[:64]
+    if not node:
+        raise HTTPException(400, "node required")
+    types = sorted({t for t in known.split(",") if TYPE_RE.match(t)})
+    with _settings_lock:
+        data = load_settings()
+        changed = False
+        if types and data["known_types"].get(node) != types:
+            data["known_types"][node] = types
+            changed = True
+        now = datetime.now().isoformat(timespec="seconds")
+        last = data["last_seen"].get(node)
+        if not last or now[:16] != last[:16]:    # write at most once a minute
+            data["last_seen"][node] = now
+            changed = True
+        if changed:
+            save_settings(data)
+    return {"node": node, "event_types": upload_types_for(data, node)}
+
+
 @app.get("/api/settings")
 def get_settings(request: Request):
     check_token(request)
-    return load_settings()
+    return settings_view(load_settings())
 
 
 @app.put("/api/settings")
 async def put_settings(request: Request):
+    """Body may carry retention_days and/or upload_types {node: [types]}."""
     check_token(request)
     body = await request.json()
-    try:
-        days = int(body["retention_days"])
-    except (KeyError, TypeError, ValueError):
-        raise HTTPException(400, "retention_days must be a whole number")
-    if not 1 <= days <= 3650:
-        raise HTTPException(400, "retention_days must be 1 to 3650")
-    data = load_settings()
-    data["retention_days"] = days
-    save_settings(data)
-    deleted = sweep()
-    return {**data, "deleted_now": deleted}
+    if not isinstance(body, dict):
+        raise HTTPException(400, "JSON object expected")
+    deleted = 0
+    with _settings_lock:
+        data = load_settings()
+        if "retention_days" in body:
+            try:
+                days = int(body["retention_days"])
+            except (TypeError, ValueError):
+                raise HTTPException(400, "retention_days must be a whole number")
+            if not 1 <= days <= 3650:
+                raise HTTPException(400, "retention_days must be 1 to 3650")
+            data["retention_days"] = days
+        if "upload_types" in body:
+            ut = body["upload_types"]
+            if not isinstance(ut, dict):
+                raise HTTPException(400, "upload_types must map node to a list")
+            for node, types in ut.items():
+                if not isinstance(types, list) or not all(
+                        isinstance(t, str) and TYPE_RE.match(t) for t in types):
+                    raise HTTPException(400, f"bad type list for {node}")
+                data["upload_types"][str(node)[:64]] = sorted(set(types))
+        save_settings(data)
+    if "retention_days" in body:
+        deleted = sweep()
+    return {**settings_view(data), "deleted_now": deleted}
 
 
 if __name__ == "__main__":

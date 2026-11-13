@@ -137,3 +137,35 @@ def test_save_retention_and_auth(env):
     with pytest.raises(urllib.error.HTTPError) as err:
         _req(env.base, "/api/ingest/node-c-x/thumb", "PUT", b"x")
     assert err.value.code == 401
+
+
+def test_upload_types_set_on_console_reach_node_without_restart(env):
+    _start(env.server)
+    env.up.known_types = ["anomaly", "human", "vehicle"]
+    env.up.refresh_config(force=True)
+    assert env.up.config_source == "server"
+    assert not env.up.wants("vehicle")                       # default: off
+
+    _, _, body = _req(env.base, "/api/settings")
+    node = json.loads(body)["nodes"][0]
+    assert node["node"] == "Node C"
+    assert node["known_types"] == ["anomaly", "human", "vehicle"]
+
+    _req(env.base, "/api/settings", "PUT",
+         json.dumps({"upload_types": {"Node C": ["vehicle"]}}).encode(),
+         {"Content-Type": "application/json"})
+    env.up.refresh_config(force=True)
+    assert env.up.wants("vehicle") and not env.up.wants("human")
+
+    env.up.enqueue(_clip(env.tmp, "h", "2026-11-12T10:00:00", trigger="human"))
+    assert env.up.status()["queued"] == 0
+    p = Path(_clip(env.tmp, "a", "2026-11-12T10:00:00", trigger="human").path)
+    env.up.enqueue_anomaly(p, time.time() - 20, time.time(), "human", 0.7)
+    assert env.up.status()["queued"] == 0                    # anomaly off too
+    env.up.enqueue(_clip(env.tmp, "v", "2026-11-12T10:00:00", trigger="vehicle"))
+    assert env.up.status()["queued"] == 1
+
+    # The list survives a node restart with the server down.
+    from src.cloud.uploader import CloudUploader
+    again = CloudUploader("http://127.0.0.1:9", "Node C", env.tmp / "queue", token=TOKEN)
+    assert again.config_source == "cache" and again.wants("vehicle")

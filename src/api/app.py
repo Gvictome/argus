@@ -299,6 +299,7 @@ def create_app() -> FastAPI:
                     min_free_bytes=int(settings.RECORD_MIN_FREE_GB * 1e9),
                     pre_roll_s=settings.RECORD_PRE_ROLL_S,
                     event_types=settings.CLOUD_EVENT_TYPES.split(","),
+                    known_types=[t.value for t in app.state.event_recorder.config.triggers],
                 )
                 if app.state.clip_keeper is not None:
                     app.state.clip_keeper.on_keep = app.state.cloud_uploader.enqueue_anomaly

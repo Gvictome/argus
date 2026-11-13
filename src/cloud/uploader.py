@@ -65,7 +65,8 @@ class CloudUploader:
                  token: str = "", clip_max_s: float = 20.0,
                  queue_max_bytes: int = 1_500_000_000,
                  min_free_bytes: int = 0, pre_roll_s: float = 5.0,
-                 event_types=("human", "dangerous_person", "face", "package")):
+                 event_types=("human", "dangerous_person", "face", "package", "anomaly"),
+                 known_types=(), config_every_s: float = 60.0):
         self.server = server_url.rstrip("/")
         self.node = node_name
         self.queue_dir = Path(queue_dir)
@@ -75,9 +76,23 @@ class CloudUploader:
         self.queue_max_bytes = queue_max_bytes
         self.min_free_bytes = min_free_bytes
         self.pre_roll_s = pre_roll_s
-        # Which recorder triggers upload on their own. Anomaly clips (the
-        # clip keeper's P1 verdict) upload regardless, via enqueue_anomaly.
+        # Which event types upload: recorder triggers, plus "anomaly" for
+        # clips the keeper keeps on a P1 verdict. Set from the console
+        # (Events tab) and fetched from the server every config_every_s, so
+        # a change needs no restart. CLOUD_EVENT_TYPES is only the fallback
+        # until the first fetch; the last fetched list is cached on disk.
         self.event_types = {t.strip() for t in event_types if t.strip()}
+        self.known_types = sorted({t for t in known_types if t} | {"anomaly"})
+        self.config_every_s = config_every_s
+        self._config_at = float("-inf")
+        self.config_source = "default"
+        self._config_cache = self.queue_dir.parent / "cloud_config.json"
+        try:
+            cached = json.loads(self._config_cache.read_text())
+            self.event_types = set(cached["event_types"])
+            self.config_source = "cache"
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
         self.ffmpeg = shutil.which("ffmpeg")
         if self.ffmpeg is None:
             logger.warning("cloud: ffmpeg not found; clips upload as mp4v "
@@ -98,11 +113,38 @@ class CloudUploader:
     def wants(self, trigger: str) -> bool:
         return "all" in self.event_types or trigger in self.event_types
 
+    def refresh_config(self, force: bool = False) -> None:
+        """Fetch this node's upload types from the server (rate-limited)."""
+        now = time.monotonic()
+        if not force and now - self._config_at < self.config_every_s:
+            return
+        self._config_at = now
+        q = urllib.parse.urlencode({"node": self.node, "known": ",".join(self.known_types)})
+        req = urllib.request.Request(f"{self.server}/api/node-config?{q}")
+        if self.token:
+            req.add_header("X-Argus-Token", self.token)
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                types = json.loads(resp.read())["event_types"]
+        except Exception as exc:
+            logger.debug("cloud: config fetch failed: %s", exc)
+            return
+        new = {str(t) for t in types}
+        if new != self.event_types or self.config_source != "server":
+            if new != self.event_types:
+                logger.info("cloud: upload types now %s", sorted(new))
+            self.event_types = new
+            self.config_source = "server"
+            try:
+                self._config_cache.write_text(json.dumps({"event_types": sorted(new)}))
+            except OSError:
+                pass
+
     def enqueue_anomaly(self, path: Path, start: float, end: float,
                         trigger: str, confidence: float) -> None:
         """A clip the keeper kept for a P1 (anomaly) event. Skipped when its
-        trigger already uploaded it on close."""
-        if self.wants(trigger):
+        trigger already uploaded it on close, or anomalies are switched off."""
+        if self.wants(trigger) or not self.wants("anomaly"):
             return
         self.enqueue(SimpleNamespace(
             path=str(path), started_at=datetime.fromtimestamp(start).isoformat(),
@@ -252,6 +294,7 @@ class CloudUploader:
     # -- worker ------------------------------------------------------------
 
     def run_once(self) -> None:
+        self.refresh_config()
         now = time.time()
         for item in self._items():
             if self._stop.is_set():
@@ -313,4 +356,6 @@ class CloudUploader:
             "last_ok_at": self.last_ok_at,
             "last_error": self.last_error,
             "transcode": self.ffmpeg is not None,
+            "event_types": sorted(self.event_types),
+            "config_source": self.config_source,
         }
