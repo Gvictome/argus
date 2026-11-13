@@ -193,6 +193,14 @@ def create_app() -> FastAPI:
                         )
                     except Exception as exc:
                         logger.warning("Could not log clip: %s", exc)
+                    # Cloud Connect links the clip into its queue before
+                    # the keeper can delete it.
+                    uploader = getattr(app.state, "cloud_uploader", None)
+                    if uploader is not None:
+                        try:
+                            uploader.enqueue(record)
+                        except Exception as exc:
+                            logger.warning("Could not queue clip for upload: %s", exc)
                     # The keeper is built after the sample store, below.
                     keeper = getattr(app.state, "clip_keeper", None)
                     if keeper is not None:
@@ -274,6 +282,30 @@ def create_app() -> FastAPI:
             )
             app.state.clip_keeper.start()
             logger.info("Clip keeper on: P1 clips only, cap %.1f GB", settings.RECORD_MAX_GB)
+
+        # Cloud Connect: event clips (by trigger type, plus anomaly clips the
+        # keeper keeps) go to the central server.
+        app.state.cloud_uploader = None
+        if app.state.event_recorder is not None and settings.CLOUD_URL:
+            try:
+                from src.cloud.uploader import CloudUploader
+                app.state.cloud_uploader = CloudUploader(
+                    server_url=settings.CLOUD_URL,
+                    node_name=settings.NODE_NAME,
+                    queue_dir=Path(settings.MEDIA_DIR) / "cloud_queue",
+                    token=settings.CLOUD_TOKEN,
+                    clip_max_s=settings.CLOUD_CLIP_MAX_S,
+                    queue_max_bytes=settings.CLOUD_QUEUE_MAX_MB * 1_000_000,
+                    min_free_bytes=int(settings.RECORD_MIN_FREE_GB * 1e9),
+                    pre_roll_s=settings.RECORD_PRE_ROLL_S,
+                    event_types=settings.CLOUD_EVENT_TYPES.split(","),
+                )
+                if app.state.clip_keeper is not None:
+                    app.state.clip_keeper.on_keep = app.state.cloud_uploader.enqueue_anomaly
+                app.state.cloud_uploader.start()
+                logger.info("Cloud Connect on: uploading clips to %s", settings.CLOUD_URL)
+            except Exception as exc:
+                logger.warning("Cloud Connect unavailable: %s", exc)
 
         # Restore the last accepted federated model, so an update survives a
         # restart instead of reverting to random weights.
@@ -367,6 +399,9 @@ def create_app() -> FastAPI:
         keeper = getattr(app.state, "clip_keeper", None)
         if keeper is not None:
             keeper.stop()
+        uploader = getattr(app.state, "cloud_uploader", None)
+        if uploader is not None:
+            uploader.stop()
 
         # Release every camera. A CSI sensor left open blocks the next
         # process from acquiring it, which turns one crash into a reboot.

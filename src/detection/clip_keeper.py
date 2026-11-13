@@ -91,6 +91,9 @@ class ClipKeeper:
         self.kept = self.dropped = 0
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        # Called with (path, start, end, trigger, confidence) for each kept
+        # clip; Cloud Connect uploads anomaly clips through it.
+        self.on_keep: Optional[Callable] = None
 
     # -- index -----------------------------------------------------------
 
@@ -148,7 +151,8 @@ class ClipKeeper:
         end = datetime.fromisoformat(record.ended_at).timestamp()
         with self._lock:
             self._pending.append({"path": Path(record.path), "start": start,
-                                  "end": end, "trigger": record.trigger})
+                                  "end": end, "trigger": record.trigger,
+                                  "confidence": getattr(record, "peak_confidence", 0.0)})
 
     # -- the decision ----------------------------------------------------
 
@@ -163,7 +167,8 @@ class ClipKeeper:
                 hits.append(row)
         return hits
 
-    def claim(self, path: Path, start: float, end: float) -> Optional[str]:
+    def claim(self, path: Path, start: float, end: float,
+              trigger: str = "", confidence: float = 0.0) -> Optional[str]:
         """Keep the clip if a P1 event overlaps it; delete it otherwise.
 
         Returns the kept file's name, or None if it was deleted.
@@ -184,6 +189,11 @@ class ClipKeeper:
         self.kept += 1
         logger.info("clips: kept %s for P1 event(s) %s", kept.name,
                     [int(r["n"]) for r in hits])
+        if self.on_keep is not None:
+            try:
+                self.on_keep(kept, start, end, trigger, confidence)
+            except Exception as exc:
+                logger.warning("clips: on_keep failed for %s: %s", kept.name, exc)
         return kept.name
 
     def _transcode(self, path: Path) -> Path:
@@ -257,7 +267,8 @@ class ClipKeeper:
             return
         for clip in due:
             try:
-                self.claim(clip["path"], clip["start"], clip["end"])
+                self.claim(clip["path"], clip["start"], clip["end"],
+                           clip.get("trigger", ""), clip.get("confidence", 0.0))
             except Exception as exc:
                 logger.warning("clips: verdict failed for %s: %s", clip["path"], exc)
         self.enforce_cap()

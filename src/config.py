@@ -136,6 +136,17 @@ class Settings:
     RECORD_MAX_GB: float = 4.0
     # No new clip starts while the disk has less free than this.
     RECORD_MIN_FREE_GB: float = 3.0
+    # Cloud Connect: upload every event clip to the central events server
+    # (central_server/events_server.py), e.g. http://10.0.0.239:8095.
+    # Empty turns it off. Local copies are deleted once the server confirms.
+    CLOUD_URL: str = ""
+    CLOUD_TOKEN: str = ""
+    CLOUD_CLIP_MAX_S: float = 20.0
+    CLOUD_QUEUE_MAX_MB: int = 1500
+    # Recorder triggers that upload on their own ("all" for every clip).
+    # Vehicles are off by default: a street-facing camera records dozens an
+    # hour. Anomaly (P1) clips upload whatever their trigger.
+    CLOUD_EVENT_TYPES: str = "human,dangerous_person,face,package"
 
     # Thermal monitor: SoC temperature, throttle flags and fan, sampled next
     # to the detection rate and logged per day to data/thermal/ for the
@@ -290,6 +301,11 @@ class Settings:
             RECORD_GRACE_S=float(os.getenv("RECORD_GRACE_S", 30.0)),
             RECORD_MAX_GB=float(os.getenv("RECORD_MAX_GB", 4.0)),
             RECORD_MIN_FREE_GB=float(os.getenv("RECORD_MIN_FREE_GB", 3.0)),
+            CLOUD_URL=os.getenv("CLOUD_URL", ""),
+            CLOUD_TOKEN=os.getenv("CLOUD_TOKEN", ""),
+            CLOUD_CLIP_MAX_S=float(os.getenv("CLOUD_CLIP_MAX_S", 20.0)),
+            CLOUD_QUEUE_MAX_MB=int(os.getenv("CLOUD_QUEUE_MAX_MB", 1500)),
+            CLOUD_EVENT_TYPES=os.getenv("CLOUD_EVENT_TYPES", "human,dangerous_person,face,package"),
             STATIONARY_SUPPRESS=os.getenv("STATIONARY_SUPPRESS", "true").lower() == "true",
             STATIONARY_CLASSES=os.getenv("STATIONARY_CLASSES", "vehicle,package"),
             STATIONARY_KEEP_S=float(os.getenv("STATIONARY_KEEP_S", 3600.0)),

@@ -660,11 +660,13 @@ async def list_clips(request: Request, limit: int = 20):
     """Recorded clips, newest first."""
     recorder = getattr(request.app.state, "event_recorder", None)
     keeper = getattr(request.app.state, "clip_keeper", None)
+    uploader = getattr(request.app.state, "cloud_uploader", None)
     if recorder is None:
         return {"recording": False, "clips": []}
     return {"recording": recorder.is_recording,
             "clips": recorder.recent_clips(limit),
-            "keeper": keeper.status() if keeper is not None else None}
+            "keeper": keeper.status() if keeper is not None else None,
+            "cloud": uploader.status() if uploader is not None else None}
 
 
 # ============================================================================
