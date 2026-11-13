@@ -49,10 +49,14 @@ from src.federated.store import SampleStore, holdout_split  # noqa: E402
 
 class NodeHeadClient(fl.client.NumPyClient):
     def __init__(self, store_path: Path, init_weights: Path, out_dir: Path,
-                 epochs: int, seed: int, node_name: str = "node"):
-        X, y = SampleStore(store_path).labelled()
+                 epochs: int, seed: int, node_name: str = "node",
+                 human_only: bool = False):
+        store = SampleStore(store_path)
+        X, y = store.labelled(human_only=human_only)
         if len(X) == 0:
-            raise SystemExit("no labelled samples in the store")
+            raise SystemExit("no human-reviewed labels in the store" if human_only
+                             else "no labelled samples in the store")
+        counts = store.provenance_counts()
         self.Xt, self.yt, self.Xv, self.yv = holdout_split(X, y, seed)
         self.head = FederatedHead(seed=0)
         if init_weights and Path(init_weights).exists():
@@ -63,6 +67,9 @@ class NodeHeadClient(fl.client.NumPyClient):
         self.node_name = node_name
         self.round = 0
         self._log(kind="ready", train=len(self.Xt), val=len(self.Xv),
+                  human_only=human_only,
+                  labels_reviewed=counts["reviewed"],
+                  labels_machine=counts["machine_unreviewed"],
                   params=self.head.n_params,
                   warm_start=bool(init_weights and Path(init_weights).exists()))
 
@@ -149,6 +156,8 @@ def main() -> int:
     ap.add_argument("--epochs", type=int, default=6)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--node-name", default="node")
+    ap.add_argument("--human-only", action="store_true",
+                    help="train only on labels a person reviewed")
     ap.add_argument("--central-api", default="",
                     help="Aggregator REST API, e.g. http://192.168.1.50:8090")
     a = ap.parse_args()
@@ -157,7 +166,8 @@ def main() -> int:
         register_with_central(a.central_api, a.node_name)
 
     client = NodeHeadClient(Path(a.store), Path(a.init) if a.init else None,
-                            Path(a.out), a.epochs, a.seed, a.node_name)
+                            Path(a.out), a.epochs, a.seed, a.node_name,
+                            human_only=a.human_only)
     fl.client.start_client(server_address=a.server, client=client.to_client())
     client._log(kind="done", rounds=client.round)
     return 0
