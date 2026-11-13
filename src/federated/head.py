@@ -100,6 +100,10 @@ class FederatedHead:
         logits, _ = self._forward(X)
         return logits.argmax(axis=1)
 
+    def predict_proba(self, X: np.ndarray) -> np.ndarray:
+        logits, _ = self._forward(X)
+        return self._softmax(logits)
+
     def infer_one(self, x: np.ndarray) -> int:
         """Single-sample forward pass -- what the pipeline calls per frame."""
         logits, _ = self._forward(x.reshape(1, -1))

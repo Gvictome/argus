@@ -211,22 +211,26 @@ def _score(head: FederatedHead, X, y) -> dict:
 def accept_candidate(app, candidate_path, source: str,
                      tolerance: float = 0.01, extra: Optional[dict] = None,
                      loss_tolerance: float = 0.05,
-                     min_anomaly_recall: Optional[float] = None) -> dict:
+                     min_anomaly_recall: Optional[float] = None,
+                     human_only: bool = False) -> dict:
     """Validate a candidate against the live head; swap it in if it holds up.
 
     Besides the balanced-accuracy and loss checks, a candidate must reach
     `min_anomaly_recall` (default settings.FL_MIN_ANOMALY_RECALL) on the
     anomaly class, first model included. Skipped when the held-out set has
     no anomaly rows, since recall is then unmeasurable rather than zero.
+
+    human_only scores on reviewed labels only. A round trained human-only
+    has to be gated human-only too, or machine labels decide its fate.
     """
     if min_anomaly_recall is None:
         min_anomaly_recall = settings.FL_MIN_ANOMALY_RECALL
     store = app.state.fl_store
     live: FederatedHead = app.state.fl_head
 
-    X, y = store.labelled()
+    X, y = store.labelled(human_only=human_only)
     if len(X) == 0:
-        return {"accepted": False, "source": source,
+        return {"accepted": False, "source": source, "human_only": human_only,
                 "reason": "no labelled samples to validate against"}
     _, _, Xv, yv = holdout_split(X, y, seed=0)
 
@@ -283,6 +287,7 @@ def accept_candidate(app, candidate_path, source: str,
         "loss_tolerance": loss_tolerance,
         "min_anomaly_recall": min_anomaly_recall,
         "val_samples": int(len(Xv)),
+        "human_only": human_only,
         "at": time.time(),
         **(extra or {}),
     }
