@@ -31,6 +31,7 @@ from src.config import settings
 from src.federated import model_state
 from src.federated.features import LABEL_NAMES, N_CLASSES, N_FEATURES
 from src.federated.store import ReviewedLabelConflict
+from src.federated.active import auto_label, score_rows
 from src.federated.suggest import SuggestionStore, generate_suggestions
 
 logger = logging.getLogger(__name__)
@@ -132,6 +133,52 @@ async def generate(body: GenerateSuggestionsRequest, request: Request):
     return await asyncio.to_thread(
         generate_suggestions, st, _suggestion_store(st), head,
         None if version == "untrained" else version, set(body.exclude))
+
+
+# ============================================================================
+# Swipe console: active learning scores and confident auto-labels
+# ============================================================================
+
+def _live_version(request: Request) -> Optional[str]:
+    version = model_state.model_version(request.app)
+    return None if version == "untrained" else version
+
+
+@router.get("/api/federated/scores", tags=["Federated"])
+async def scores(request: Request, since: Optional[float] = None,
+                 until: Optional[float] = None):
+    """The live head's probabilities and uncertainty for every real event.
+
+    Read-only. `since`/`until` are epoch seconds on the node's clock.
+    """
+    st, head = _store(request), _head(request)
+    return await asyncio.to_thread(
+        score_rows, st, head, _live_version(request), since, until)
+
+
+class AutoLabelRequest(BaseModel):
+    threshold: float = 0.95
+    # The console's test set, which must never be labelled by the machine.
+    exclude: List[int] = []
+    since: Optional[float] = None
+    until: Optional[float] = None
+    dry_run: bool = False
+
+
+@router.post("/api/federated/autolabel", tags=["Federated"])
+async def autolabel(body: AutoLabelRequest, request: Request):
+    """Machine-label unlabelled events the head is very sure about.
+
+    Labels are origin=machine, reviewed=False, so human_only training never
+    sees them, and they never replace a person's label.
+    """
+    st, head = _store(request), _head(request)
+    try:
+        return await asyncio.to_thread(
+            auto_label, st, head, _live_version(request), body.threshold,
+            body.exclude, body.since, body.until, body.dry_run)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 class BootstrapRequest(BaseModel):

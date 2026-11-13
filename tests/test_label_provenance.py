@@ -142,7 +142,8 @@ def test_counts_separate_how_a_review_was_made(tmp_path):
     store.set_label_by_n(3, 0, prov=human_prov(0, "accept", 0, "rule:x"))
     assert store.provenance_counts() == {
         "reviewed": 3, "reviewed_blind": 1, "reviewed_corrected": 1,
-        "reviewed_accepted": 1, "reviewed_anomalies": 1, "machine_unreviewed": 1,
+        "reviewed_accepted": 1, "reviewed_staged": 0, "reviewed_anomalies": 1,
+        "machine_unreviewed": 1, "machine_auto": 0,
     }
 
 

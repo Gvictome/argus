@@ -238,6 +238,8 @@ class ReviewBody(BaseModel):
     suggested_label: Optional[str] = None
     suggested_source: Optional[str] = None
     via: Optional[str] = None               # which queue or view it came from
+    reviewer: Optional[str] = None          # who, as typed on the console
+    source: Optional[str] = None            # "operator" | "swipe"
 
 
 class LabelBody(BaseModel):
@@ -264,7 +266,8 @@ def _review_prov(body: LabelBody, y: int) -> Optional[dict]:
             raise HTTPException(422, "unknown suggested_label")
         suggested = LABEL_NAMES.index(review.suggested_label)
     try:
-        return human_prov(y, review.kind, suggested, review.suggested_source, review.via)
+        return human_prov(y, review.kind, suggested, review.suggested_source,
+                          review.via, reviewer=review.reviewer, source=review.source)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
 

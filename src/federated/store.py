@@ -45,6 +45,8 @@ logger = logging.getLogger(__name__)
 LEGACY_SOURCE = "legacy:rule-derived"
 UNATTRIBUTED_SOURCE = "api:unattributed"
 IMPORT_SOURCE = "import"
+# Machine labels the auto-labeler wrote for very confident events.
+AUTO_PREFIX = "auto:"
 
 
 class ReviewedLabelConflict(Exception):
@@ -56,9 +58,15 @@ def machine_prov(source: str) -> dict:
             "at": time.time()}
 
 
+# Where a person's own label came from. "operator" is the labeling screen.
+HUMAN_SOURCES = ("operator", "swipe")
+STAGED_SOURCE = "staged"
+
+
 def human_prov(label: int, review: str, suggested_label: Optional[int] = None,
                suggested_source: Optional[str] = None,
-               via: Optional[str] = None) -> dict:
+               via: Optional[str] = None, reviewer: Optional[str] = None,
+               source: Optional[str] = None) -> dict:
     """Provenance for a decision a person made on this event.
 
     `review` is how they made it:
@@ -66,13 +74,31 @@ def human_prov(label: int, review: str, suggested_label: Optional[int] = None,
       correct  a suggestion was shown and they changed it
       accept   a suggestion was shown and they kept it
 
+      staged   the team acted the event out on purpose while staging mode
+               was on, so it is an anomaly by construction
+
     An accepted label stays origin=machine and names its source, because
     the idea was the machine's. The reviewed flag records that a person
     looked. Blind and corrected labels are the only ones with no machine
     input to the final answer.
+
+    `source` names the screen a person's own label came from (operator or
+    swipe); `reviewer` is who it was, as typed on the console.
     """
-    if review not in ("blind", "correct", "accept"):
+    if review not in ("blind", "correct", "accept", "staged"):
         raise ValueError(f"unknown review kind {review!r}")
+    if source is not None and source not in HUMAN_SOURCES:
+        raise ValueError(f"unknown source {source!r}")
+    if review == "staged":
+        if int(label) != ANOMALY:
+            raise ValueError("a staged event is labelled anomaly")
+        prov = {"origin": "human", "source": STAGED_SOURCE, "reviewed": True,
+                "review": "staged", "at": time.time()}
+        if via:
+            prov["via"] = str(via)[:40]
+        if reviewer:
+            prov["reviewer"] = str(reviewer)[:40]
+        return prov
     if review != "blind" and (suggested_label is None or not suggested_source):
         raise ValueError(f"review {review!r} needs the suggestion that was shown")
     if review == "accept" and int(suggested_label) != int(label):
@@ -82,7 +108,7 @@ def human_prov(label: int, review: str, suggested_label: Optional[int] = None,
 
     prov = {
         "origin": "machine" if review == "accept" else "human",
-        "source": suggested_source if review == "accept" else "operator",
+        "source": suggested_source if review == "accept" else (source or "operator"),
         "reviewed": True,
         "review": review,
         "at": time.time(),
@@ -92,6 +118,8 @@ def human_prov(label: int, review: str, suggested_label: Optional[int] = None,
         prov["suggested_source"] = suggested_source
     if via:
         prov["via"] = str(via)[:40]
+    if reviewer:
+        prov["reviewer"] = str(reviewer)[:40]
     return prov
 
 
@@ -232,12 +260,13 @@ class SampleStore:
         return len(rows)
 
     def _apply_label(self, r: dict, label: int, prov: Optional[dict]) -> None:
-        if prov is None:
+        if prov is None or prov.get("reviewed") is not True:
             if is_reviewed(r):
                 raise ReviewedLabelConflict(
-                    f"sample {r.get('n')} was reviewed by a person; an "
-                    "unattributed write cannot replace that")
-            prov = machine_prov(UNATTRIBUTED_SOURCE)
+                    f"sample {r.get('n')} was reviewed by a person; a "
+                    "machine write cannot replace that")
+            if prov is None:
+                prov = machine_prov(UNATTRIBUTED_SOURCE)
         r["y"] = int(label)
         r["prov"] = prov
 
@@ -313,16 +342,19 @@ class SampleStore:
     def provenance_counts(self) -> dict:
         """How much of the labelled data a person actually looked at."""
         out = {"reviewed": 0, "reviewed_blind": 0, "reviewed_corrected": 0,
-               "reviewed_accepted": 0, "reviewed_anomalies": 0,
-               "machine_unreviewed": 0}
+               "reviewed_accepted": 0, "reviewed_staged": 0,
+               "reviewed_anomalies": 0, "machine_unreviewed": 0,
+               "machine_auto": 0}
         kinds = {"blind": "reviewed_blind", "correct": "reviewed_corrected",
-                 "accept": "reviewed_accepted"}
+                 "accept": "reviewed_accepted", "staged": "reviewed_staged"}
         for r in self._rows:
             prov = provenance(r)
             if prov is None:
                 continue
             if prov.get("reviewed") is not True:
                 out["machine_unreviewed"] += 1
+                if str(prov.get("source", "")).startswith(AUTO_PREFIX):
+                    out["machine_auto"] += 1
                 continue
             out["reviewed"] += 1
             if prov.get("review") in kinds:
